@@ -18,6 +18,9 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #
 
+# Fixed IP address of target, using tftp server in 38-bootloader
+TARGET_IP = 192.168.0.43
+
 CIRCLEVER = 510101
 
 CIRCLEHOME ?= ..
@@ -390,6 +393,9 @@ flash: $(TARGET).hex
 		$(TARGET).hex
 
 endif
+
+upload: $(TARGET).img
+	tftp -m binary $(TARGET_IP) -c put $(TARGET).img
 
 # Monitor in putty
 monitor:
