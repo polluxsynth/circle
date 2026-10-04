@@ -18,16 +18,19 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //
 #include "kernel.h"
-#include <circle/gpiopin.h>
 
 static const char From[] = "kernel";
 
+CKernel *CKernel::s_pThis = 0;
+
 CKernel::CKernel(void): m_Timer(&m_Interrupt),
 			//m_Serial(&m_Interrupt),
-			m_Logger(m_Options.GetLogLevel(), &m_Timer)
+			m_USBHCI(&m_Interrupt, &m_Timer, TRUE),
+			m_pKeyboard(0),
+			m_Logger(m_Options.GetLogLevel(), &m_Timer),
+			m_PrevKeys{0}
 {
-	m_ActLED.Blink(5);
-	CTimer::SimpleMsDelay(600);
+	s_pThis = this;
 }
 
 CKernel::~CKernel(void)
@@ -46,44 +49,76 @@ boolean CKernel::Initialize(void)
 		bOK = m_Interrupt.Initialize();
 	if (bOK)
 		bOK = m_Timer.Initialize();
+	if (bOK)
+		bOK = m_USBHCI.Initialize();
+
+	m_ActLED.Blink(5);
+	CTimer::SimpleMsDelay(600);
 
 	return bOK;
 }
 
 TShutdownMode CKernel::Run(void)
 {
-	CGPIOPin AudioLeft(GPIOPinAudioLeft, GPIOModeOutput);
-	CGPIOPin AudioRight(GPIOPinAudioRight, GPIOModeOutput);
-	
 	LOGDBG("MIDI Numkbd starting up\n");
-	// flash the Act LED 10 times and click on audio (3.5mm headphone jack)
-	for (unsigned i = 1; i <= 10; i++)
-	{
-		LOGDBG("Iteration %d\n", i);
-		m_ActLED.On();
-		AudioLeft.Invert();
-		AudioRight.Invert();
-		CTimer::SimpleMsDelay(200);
 
-		m_ActLED.Off();
-		CTimer::SimpleMsDelay(500);
+	for (;;) {
+		boolean bUpdated = m_USBHCI.UpdatePlugAndPlay();
+
+		if (bUpdated && m_pKeyboard == 0) {
+			LOGDBG("PnP updated, registering kbd");
+			m_pKeyboard = (CUSBKeyboardDevice *)
+				m_DeviceNameService.GetDevice("ukbd1", FALSE);
+			if (m_pKeyboard != 0) {
+				LOGDBG("Numpad connected");
+				for (int i = 0; i < 6; i++)
+					m_PrevKeys[i] = 0;
+				m_pKeyboard->RegisterRemovedHandler(DeviceRemovedHandler, this);
+				m_pKeyboard->RegisterKeyStatusHandlerRaw(KeyStatusHandlerRaw, FALSE, this);
+				m_pKeyboard->SetLEDs(0x01); // Turn on NumLock
+			}
+		}
+
+		m_Timer.MsDelay(1);
 	}
-
 	LOGDBG("Rebooting\n");
 	return ShutdownReboot;
 }
 
-#if 0
-void CKernel::Blink(unsigned nCount)
+void CKernel::DeviceRemovedHandler(CDevice *pDevice, void *pContext)
 {
-	for (unsigned i = 1; i < nCount; i++)
-	{
-		m_ActLED.On();
-		CTimer::SimpleMsDelay(150);
+	CKernel *pThis = static_cast<CKernel *>(pContext);
 
-		m_ActLED.Off();
-		CTimer::SimpleMsDelay(150);
-	}
-	CTimer::SimpleMsDelay(600);
+	assert(pThis != 0);
+	pThis->m_pKeyboard = 0;
+	LOGDBG("Numpad removed");
 }
-#endif
+
+void CKernel::KeyStatusHandlerRaw(unsigned char ucModifiers, const unsigned char RawKeys[6], void *pContext)
+{
+	CKernel *pThis = static_cast<CKernel *>(pContext);
+
+	assert(pThis != 0);
+
+	// Raw mode reports the set of keys currently held, not press events,
+	// so compare against the previous report to find new presses.
+	LOGDBG("Raw keys: 0x%02X 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x",
+		RawKeys[0], RawKeys[1], RawKeys[2], RawKeys[3], RawKeys[4], RawKeys[5]);
+	for (unsigned i = 0; i < 6; i++)
+	{
+		unsigned char key = RawKeys[i];
+		if (key == 1) return; // Rollover: bail out, skip copy to prev
+		if (key < 4) continue; // 0 = none, 1..3 = error/rollover
+		boolean bNew = TRUE;
+		for (unsigned j = 0; j < 6; j++)
+			if (pThis->m_PrevKeys[j] == key) bNew = FALSE;
+		if (bNew) pThis->OnKeyDown(ucModifiers, key);
+	}
+	for (unsigned i = 0; i < 6; i++)
+		pThis->m_PrevKeys[i] = RawKeys[i];
+}
+
+void CKernel::OnKeyDown(unsigned char ucModifiers, unsigned char ucKey)
+{
+	LOGDBG("Key down: Modifier 0x%02X Code 0x%02X", (unsigned) ucModifiers, (unsigned) ucKey);
+}

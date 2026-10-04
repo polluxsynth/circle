@@ -30,6 +30,8 @@
 #include <circle/timer.h>      // CTimer (needed by CLogger's constructor)
 #include <circle/serial.h>     // CSerialDevice
 #include <circle/logger.h>     // CLogger, and the LOGNOTICE/LOGDBG/etc. macros
+#include <circle/usb/usbhcidevice.h>
+#include <circle/usb/usbkeyboard.h>
 
 enum TShutdownMode
 {
@@ -44,8 +46,6 @@ public:
 	CKernel(void);
 	~CKernel(void);
 
-	void Blink(unsigned nCount);
-
 	boolean Initialize(void);
 
 	TShutdownMode Run(void);
@@ -57,9 +57,21 @@ private:
 	CExceptionHandler m_Exception;
 	CInterruptSystem m_Interrupt;
 	CTimer m_Timer;
+	CUSBHCIDevice m_USBHCI;               // declare after m_Timer
+	CUSBKeyboardDevice *volatile m_pKeyboard;
 	CSerialDevice m_Serial;
 	CLogger m_Logger;
-	
+
+	unsigned char m_PrevKeys[6];
+	// Fake a 'this' pointer for static callbacks, in the case they don't
+	// have a context pointer where 'this' can be passed.
+	// We can probably remove this eventually.
+	static CKernel *s_pThis;
+
+	// raw-key callback (static, because Circle takes plain function pointers)
+	static void KeyStatusHandlerRaw(unsigned char ucModifiers, const unsigned char RawKeys[6], void *pContext);
+	static void DeviceRemovedHandler(CDevice *pDevice, void *pContext);
+	void OnKeyDown(unsigned char ucModifiers, unsigned char ucUsage);
 };
 
 #endif
