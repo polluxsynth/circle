@@ -18,6 +18,7 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //
 #include "kernel.h"
+#include "rawkeys.h"
 
 static const char From[] = "kernel";
 
@@ -28,6 +29,7 @@ CKernel::CKernel(void): m_Timer(&m_Interrupt),
 			m_USBHCI(&m_Interrupt, &m_Timer, TRUE),
 			m_pKeyboard(0),
 			m_Logger(m_Options.GetLogLevel(), &m_Timer),
+			m_Reboot(false),
 			m_PrevKeys{0}
 {
 	s_pThis = this;
@@ -62,7 +64,7 @@ TShutdownMode CKernel::Run(void)
 	LOGDBG("MIDI Numkbd starting up\n");
 	m_ActLED.On();
 
-	for (;;) {
+	while (!m_Reboot) {
 		boolean bUpdated = m_USBHCI.UpdatePlugAndPlay();
 
 		if (bUpdated && m_pKeyboard == 0) {
@@ -121,4 +123,7 @@ void CKernel::KeyStatusHandlerRaw(unsigned char ucModifiers, const unsigned char
 void CKernel::OnKeyDown(unsigned char ucModifiers, unsigned char ucKey)
 {
 	LOGDBG("Key down: Modifier 0x%02X Code 0x%02X", (unsigned) ucModifiers, (unsigned) ucKey);
+
+	if (ucKey == KEYPAD_TAB)
+		m_Reboot = true;
 }
