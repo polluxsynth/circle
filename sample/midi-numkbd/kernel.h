@@ -62,6 +62,8 @@ private:
 	CSerialDevice m_Serial;
 	CLogger m_Logger;
 
+	volatile bool m_Reboot; // Set to true to cause main loop to exit
+
 	unsigned char m_PrevKeys[6];
 	// Fake a 'this' pointer for static callbacks, in the case they don't
 	// have a context pointer where 'this' can be passed.
