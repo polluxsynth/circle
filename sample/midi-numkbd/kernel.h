@@ -32,6 +32,9 @@
 #include <circle/logger.h>     // CLogger, and the LOGNOTICE/LOGDBG/etc. macros
 #include <circle/usb/usbhcidevice.h>
 #include <circle/usb/usbkeyboard.h>
+#include <assert.h>
+
+#include "spscqueue.h"
 
 enum TShutdownMode
 {
