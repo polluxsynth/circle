@@ -30,6 +30,9 @@ static const int FirstProgramNumber = 1;
 // MIDI channel, 0..15 (0 is "channel 1")
 static const unsigned MidiChannel = 0;
 
+// The LED blinks at 4 Hz while a number is being typed: 125 ms on, 125 ms off
+static const unsigned BlinkHalfPeriodMs = 125;
+
 CKernel::CKernel(void): m_Timer(&m_Interrupt),
 			//m_Serial(&m_Interrupt),
 			m_USBHCI(&m_Interrupt, &m_Timer, TRUE),
@@ -38,7 +41,10 @@ CKernel::CKernel(void): m_Timer(&m_Interrupt),
 			m_Reboot(false),
 			m_PrevKeys{0},
 			m_nLastDropped(0),
-			m_Selector(FirstProgramNumber)
+			m_Selector(FirstProgramNumber),
+			m_bLEDOn(true),
+			m_bBlinking(false),
+			m_nLastToggleMs(0)
 {
 	s_pThis = this;
 }
@@ -89,6 +95,8 @@ TShutdownMode CKernel::Run(void)
 		if (nProgram != CProgramSelector::NoChange)
 			SendProgramChange(nProgram);
 
+		UpdateLED();
+
 		unsigned nDropped = m_KeyQueue.Dropped();
 		if (nDropped != m_nLastDropped) {
 			LOGWARN("Key queue overflow, %u events dropped in total", nDropped);
@@ -119,7 +127,9 @@ void CKernel::AttachKeyboard(void)
 
 	pKeyboard->RegisterRemovedHandler(DeviceRemovedHandler, this);
 	pKeyboard->RegisterKeyStatusHandlerRaw(KeyStatusHandlerRaw, FALSE, this);
-	pKeyboard->SetLEDs(0x01); // Turn on NumLock
+	pKeyboard->SetLEDs(LED_NUM_LOCK);
+	m_bLEDOn = true;
+	m_bBlinking = false;
 
 	m_pKeyboard = pKeyboard;
 }
@@ -196,4 +206,40 @@ void CKernel::SendProgramChange(unsigned nProgram)
 unsigned CKernel::NowMs(void)
 {
 	return m_Timer.GetTicks() * (1000 / HZ);
+}
+
+// Blink the NumLock LED while a number is being typed, so it is clear that
+// input is pending; steady on otherwise. Runs in the main loop only, because
+// SetLEDs() is a blocking USB control transfer.
+void CKernel::UpdateLED(void)
+{
+	CUSBKeyboardDevice *pKeyboard = m_pKeyboard;
+	if (pKeyboard == 0)
+		return;
+
+	bool bEntry = m_Selector.EntryDigits() > 0;
+	unsigned nNowMs = NowMs();
+	bool bOn = m_bLEDOn;
+
+	if (!bEntry)
+		bOn = true;
+	else if (!m_bBlinking) {
+		bOn = false;		// entry just started: go dark immediately
+		m_nLastToggleMs = nNowMs;
+	}
+	else if ((unsigned) (nNowMs - m_nLastToggleMs) >= BlinkHalfPeriodMs) {
+		bOn = !m_bLEDOn;
+
+		// Advance by exactly one half-period so timer granularity and
+		// loop jitter don't accumulate; resync if we fell far behind.
+		m_nLastToggleMs += BlinkHalfPeriodMs;
+		if ((unsigned) (nNowMs - m_nLastToggleMs) >= BlinkHalfPeriodMs)
+			m_nLastToggleMs = nNowMs;
+	}
+	m_bBlinking = bEntry;
+
+	if (bOn != m_bLEDOn) {
+		pKeyboard->SetLEDs(bOn ? LED_NUM_LOCK : 0);
+		m_bLEDOn = bOn;
+	}
 }
