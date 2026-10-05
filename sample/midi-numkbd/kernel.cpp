@@ -23,6 +23,12 @@
 static const char From[] = "kernel";
 
 CKernel *CKernel::s_pThis = 0;
+// Number the user types for MIDI program 0: 0 = typed number is the wire
+// value (0..127); 1 = entry is 1-based (1..128), as most devices display it.
+static const int FirstProgramNumber = 1;
+
+// MIDI channel, 0..15 (0 is "channel 1")
+static const unsigned MidiChannel = 0;
 
 CKernel::CKernel(void): m_Timer(&m_Interrupt),
 			//m_Serial(&m_Interrupt),
@@ -31,7 +37,8 @@ CKernel::CKernel(void): m_Timer(&m_Interrupt),
 			m_Logger(m_Options.GetLogLevel(), &m_Timer),
 			m_Reboot(false),
 			m_PrevKeys{0},
-			m_nLastDropped(0)
+			m_nLastDropped(0),
+			m_Selector(FirstProgramNumber)
 {
 	s_pThis = this;
 }
@@ -76,6 +83,11 @@ TShutdownMode CKernel::Run(void)
 		TKeyEvent Event;
 		while (m_KeyQueue.Pop(Event))
 			HandleKey(Event);
+
+		// Commit a half-typed number once the idle timeout expires
+		int nProgram = m_Selector.Tick(NowMs());
+		if (nProgram != CProgramSelector::NoChange)
+			SendProgramChange(nProgram);
 
 		unsigned nDropped = m_KeyQueue.Dropped();
 		if (nDropped != m_nLastDropped) {
@@ -160,6 +172,28 @@ void CKernel::HandleKey(const TKeyEvent &Event)
 	LOGDBG("Key down: Modifier 0x%02X Code 0x%02X",
 		(unsigned) Event.ucModifiers, (unsigned) Event.ucKey);
 
-	if (Event.ucKey == KEYPAD_TAB)
+	if (Event.ucKey == KEYPAD_TAB) {
 		m_Reboot = true;
+		return;
+	}
+
+	int nProgram = m_Selector.KeyPressed(Event.ucKey, NowMs());
+	if (nProgram != CProgramSelector::NoChange)
+		SendProgramChange(nProgram);
+	else if (m_Selector.EntryDigits() > 0)
+		LOGDBG("Entry so far: %d", m_Selector.EntryNumber());
+}
+
+// TODO: send a real MIDI message; for now just report what would be sent.
+void CKernel::SendProgramChange(unsigned nProgram)
+{
+	LOGNOTE("Program change: channel %u program %u",
+		MidiChannel + 1, nProgram);
+}
+
+// Millisecond count for the selector's timeout. GetTicks() runs at HZ
+// ticks per second and takes over a year to wrap.
+unsigned CKernel::NowMs(void)
+{
+	return m_Timer.GetTicks() * (1000 / HZ);
 }
