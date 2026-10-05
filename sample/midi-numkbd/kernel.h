@@ -35,6 +35,7 @@
 #include <assert.h>
 
 #include "spscqueue.h"
+#include "progselect.h"
 
 // A key press, queued from the USB interrupt path for the main loop
 struct TKeyEvent
@@ -86,8 +87,14 @@ private:
 	CSpscQueue<TKeyEvent, 32> m_KeyQueue;
 	unsigned m_nLastDropped;
 
+	// Turns key presses into program numbers; remembers the last one.
+	// Only used from the main loop.
+	CProgramSelector m_Selector;
+
 	void AttachKeyboard (void);
 	void HandleKey (const TKeyEvent &Event);
+	void SendProgramChange(unsigned nProgram);
+	unsigned NowMs(void);
 
 	// USB callbacks. Static because Circle takes plain function pointers.
 	// KeyStatusHandlerRaw may run in interrupt context: keep it short,
