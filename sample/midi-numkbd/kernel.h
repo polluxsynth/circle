@@ -91,10 +91,17 @@ private:
 	// Only used from the main loop.
 	CProgramSelector m_Selector;
 
-	void AttachKeyboard (void);
-	void HandleKey (const TKeyEvent &Event);
+	// NumLock LED feedback: steady on normally, blinking while a number is
+	// being typed. Main loop only.
+	bool m_bLEDOn;			// state we last sent to the keyboard
+	bool m_bBlinking;		// a number is being entered
+	unsigned m_nLastToggleMs;	// when the LED last changed while blinking
+
+	void AttachKeyboard(void);
+	void HandleKey(const TKeyEvent &Event);
 	void SendProgramChange(unsigned nProgram);
 	unsigned NowMs(void);
+	void UpdateLED(void);
 
 	// USB callbacks. Static because Circle takes plain function pointers.
 	// KeyStatusHandlerRaw may run in interrupt context: keep it short,
