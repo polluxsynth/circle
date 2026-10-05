@@ -36,6 +36,13 @@
 
 #include "spscqueue.h"
 
+// A key press, queued from the USB interrupt path for the main loop
+struct TKeyEvent
+{
+	unsigned char ucKey;		// raw USB HID usage code
+	unsigned char ucModifiers;	// modifier bits at the time of the press
+};
+
 enum TShutdownMode
 {
 	ShutdownNone,
@@ -65,18 +72,28 @@ private:
 	CSerialDevice m_Serial;
 	CLogger m_Logger;
 
-	volatile bool m_Reboot; // Set to true to cause main loop to exit
+	bool m_Reboot; // Set (from the main loop only) to make Run() exit
 
+	// Previous raw report, used to detect new presses. Touched only by
+	// the USB callback (IRQ context) once the handler is registered.
 	unsigned char m_PrevKeys[6];
 	// Fake a 'this' pointer for static callbacks, in the case they don't
 	// have a context pointer where 'this' can be passed.
 	// We can probably remove this eventually.
 	static CKernel *s_pThis;
 
-	// raw-key callback (static, because Circle takes plain function pointers)
+	// Key presses: produced in the USB callback, consumed in Run().
+	CSpscQueue<TKeyEvent, 32> m_KeyQueue;
+	unsigned m_nLastDropped;
+
+	void AttachKeyboard (void);
+	void HandleKey (const TKeyEvent &Event);
+
+	// USB callbacks. Static because Circle takes plain function pointers.
+	// KeyStatusHandlerRaw may run in interrupt context: keep it short,
+	// no logging, no blocking, just enqueue.
 	static void KeyStatusHandlerRaw(unsigned char ucModifiers, const unsigned char RawKeys[6], void *pContext);
 	static void DeviceRemovedHandler(CDevice *pDevice, void *pContext);
-	void OnKeyDown(unsigned char ucModifiers, unsigned char ucUsage);
 };
 
 #endif
