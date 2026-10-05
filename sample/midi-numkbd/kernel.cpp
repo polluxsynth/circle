@@ -30,7 +30,8 @@ CKernel::CKernel(void): m_Timer(&m_Interrupt),
 			m_pKeyboard(0),
 			m_Logger(m_Options.GetLogLevel(), &m_Timer),
 			m_Reboot(false),
-			m_PrevKeys{0}
+			m_PrevKeys{0},
+			m_nLastDropped(0)
 {
 	s_pThis = this;
 }
@@ -67,24 +68,48 @@ TShutdownMode CKernel::Run(void)
 	while (!m_Reboot) {
 		boolean bUpdated = m_USBHCI.UpdatePlugAndPlay();
 
-		if (bUpdated && m_pKeyboard == 0) {
-			LOGDBG("PnP updated, registering kbd");
-			m_pKeyboard = (CUSBKeyboardDevice *)
-				m_DeviceNameService.GetDevice("ukbd1", FALSE);
-			if (m_pKeyboard != 0) {
-				LOGDBG("Numpad connected");
-				for (int i = 0; i < 6; i++)
-					m_PrevKeys[i] = 0;
-				m_pKeyboard->RegisterRemovedHandler(DeviceRemovedHandler, this);
-				m_pKeyboard->RegisterKeyStatusHandlerRaw(KeyStatusHandlerRaw, FALSE, this);
-				m_pKeyboard->SetLEDs(0x01); // Turn on NumLock
-			}
+		if (bUpdated && m_pKeyboard == 0)
+			AttachKeyboard();
+
+		// Drain key events queued by the USB callback. All the slow
+		// work (logging, and later MIDI output) happens here.
+		TKeyEvent Event;
+		while (m_KeyQueue.Pop(Event))
+			HandleKey(Event);
+
+		unsigned nDropped = m_KeyQueue.Dropped();
+		if (nDropped != m_nLastDropped) {
+			LOGWARN("Key queue overflow, %u events dropped in total", nDropped);
+			m_nLastDropped = nDropped;
 		}
 
 		m_Timer.MsDelay(1);
 	}
 	LOGDBG("Rebooting\n");
 	return ShutdownReboot;
+}
+
+void CKernel::AttachKeyboard(void)
+{
+	LOGDBG("PnP updated, looking for keyboard");
+
+	CUSBKeyboardDevice *pKeyboard = (CUSBKeyboardDevice *)
+		m_DeviceNameService.GetDevice("ukbd1", FALSE);
+	if (pKeyboard == 0)
+		return;
+
+	LOGDBG("Numpad connected");
+
+	// Reset the report history before registering the callback, 
+	// to avoid race with the callback.
+	for (int i = 0; i < 6; i++)
+		m_PrevKeys[i] = 0;
+
+	pKeyboard->RegisterRemovedHandler(DeviceRemovedHandler, this);
+	pKeyboard->RegisterKeyStatusHandlerRaw(KeyStatusHandlerRaw, FALSE, this);
+	pKeyboard->SetLEDs(0x01); // Turn on NumLock
+
+	m_pKeyboard = pKeyboard;
 }
 
 void CKernel::DeviceRemovedHandler(CDevice *pDevice, void *pContext)
@@ -96,6 +121,7 @@ void CKernel::DeviceRemovedHandler(CDevice *pDevice, void *pContext)
 	LOGDBG("Numpad removed");
 }
 
+// May be called in interrupt context. Only compare, enqueue and return.
 void CKernel::KeyStatusHandlerRaw(unsigned char ucModifiers, const unsigned char RawKeys[6], void *pContext)
 {
 	CKernel *pThis = static_cast<CKernel *>(pContext);
@@ -104,26 +130,36 @@ void CKernel::KeyStatusHandlerRaw(unsigned char ucModifiers, const unsigned char
 
 	// Raw mode reports the set of keys currently held, not press events,
 	// so compare against the previous report to find new presses.
-	LOGDBG("Raw keys: 0x%02X 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x",
-		RawKeys[0], RawKeys[1], RawKeys[2], RawKeys[3], RawKeys[4], RawKeys[5]);
+
+	// Rollover/error report (usage 1): ignore it entirely and keep the
+	// previous state, so keys aren't reported as released and re-pressed.
+	for (unsigned i = 0; i < 6; i++)
+		if (RawKeys[i] == 1)
+			return;
+
 	for (unsigned i = 0; i < 6; i++)
 	{
 		unsigned char key = RawKeys[i];
-		if (key == 1) return; // Rollover: bail out, skip copy to prev
-		if (key < 4) continue; // 0 = none, 1..3 = error/rollover
-		boolean bNew = TRUE;
+		if (key < 4) continue; // 0 = none, 2..3 = error codes
+
+		bool bNew = true;
 		for (unsigned j = 0; j < 6; j++)
-			if (pThis->m_PrevKeys[j] == key) bNew = FALSE;
-		if (bNew) pThis->OnKeyDown(ucModifiers, key);
+			if (pThis->m_PrevKeys[j] == key) bNew = false;
+
+		if (bNew)
+			pThis->m_KeyQueue.Push(TKeyEvent{key, ucModifiers});
 	}
+
 	for (unsigned i = 0; i < 6; i++)
 		pThis->m_PrevKeys[i] = RawKeys[i];
 }
 
-void CKernel::OnKeyDown(unsigned char ucModifiers, unsigned char ucKey)
+// Main-loop context: safe to log, block briefly, send MIDI, etc.
+void CKernel::HandleKey(const TKeyEvent &Event)
 {
-	LOGDBG("Key down: Modifier 0x%02X Code 0x%02X", (unsigned) ucModifiers, (unsigned) ucKey);
+	LOGDBG("Key down: Modifier 0x%02X Code 0x%02X",
+		(unsigned) Event.ucModifiers, (unsigned) Event.ucKey);
 
-	if (ucKey == KEYPAD_TAB)
+	if (Event.ucKey == KEYPAD_TAB)
 		m_Reboot = true;
 }
