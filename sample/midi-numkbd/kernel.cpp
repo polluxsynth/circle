@@ -30,8 +30,15 @@ static const int FirstProgramNumber = 1;
 // MIDI channel, 0..15 (0 is "channel 1")
 static const unsigned MidiChannel = 0;
 
-// The LED blinks at 4 Hz while a number is being typed: 125 ms on, 125 ms off
-static const unsigned BlinkHalfPeriodMs = 125;
+// LED patterns. Each starts with its dark phase, so a change of mode is
+// visible at once.
+//
+// While a number is being typed: 4 Hz, 50% duty (125 ms off, then 125 ms on)
+static const unsigned EntryBlinkPeriodMs = 250;
+
+// In bank lock mode: 85% on / 15% off, once a second (150 ms off, 850 ms on)
+static const unsigned BankLockPeriodMs = 1000;
+static const unsigned BankLockOffMs = 150;
 
 CKernel::CKernel(void): m_Timer(&m_Interrupt),
 			//m_Serial(&m_Interrupt),
@@ -43,8 +50,8 @@ CKernel::CKernel(void): m_Timer(&m_Interrupt),
 			m_nLastDropped(0),
 			m_Selector(FirstProgramNumber),
 			m_bLEDOn(true),
-			m_bBlinking(false),
-			m_nLastToggleMs(0)
+			m_LEDMode(LEDSteady),
+			m_nPatternStartMs(0)
 {
 	s_pThis = this;
 }
@@ -129,7 +136,7 @@ void CKernel::AttachKeyboard(void)
 	pKeyboard->RegisterKeyStatusHandlerRaw(KeyStatusHandlerRaw, FALSE, this);
 	pKeyboard->SetLEDs(LED_NUM_LOCK);
 	m_bLEDOn = true;
-	m_bBlinking = false;
+	m_LEDMode = LEDSteady;
 
 	m_pKeyboard = pKeyboard;
 }
@@ -208,35 +215,39 @@ unsigned CKernel::NowMs(void)
 	return m_Timer.GetTicks() * (1000 / HZ);
 }
 
-// Blink the NumLock LED while a number is being typed, so it is clear that
-// input is pending; steady on otherwise. Runs in the main loop only, because
-// SetLEDs() is a blocking USB control transfer.
+// Show the mode on the NumLock LED (see the TLEDMode comment in kernel.h).
+// Runs in the main loop only, because SetLEDs() is a blocking USB control
+// transfer; it is only called when the LED actually needs to change.
 void CKernel::UpdateLED(void)
 {
 	CUSBKeyboardDevice *pKeyboard = m_pKeyboard;
 	if (pKeyboard == 0)
 		return;
 
-	bool bEntry = m_Selector.EntryDigits() > 0;
+	TLEDMode Mode = LEDSteady;
+	if (m_Selector.EntryDigits() > 0)
+		Mode = LEDEntry;
+
 	unsigned nNowMs = NowMs();
-	bool bOn = m_bLEDOn;
-
-	if (!bEntry)
-		bOn = true;
-	else if (!m_bBlinking) {
-		bOn = false;		// entry just started: go dark immediately
-		m_nLastToggleMs = nNowMs;
+	if (Mode != m_LEDMode) {
+		m_LEDMode = Mode;
+		m_nPatternStartMs = nNowMs;
 	}
-	else if ((unsigned) (nNowMs - m_nLastToggleMs) >= BlinkHalfPeriodMs) {
-		bOn = !m_bLEDOn;
 
-		// Advance by exactly one half-period so timer granularity and
-		// loop jitter don't accumulate; resync if we fell far behind.
-		m_nLastToggleMs += BlinkHalfPeriodMs;
-		if ((unsigned) (nNowMs - m_nLastToggleMs) >= BlinkHalfPeriodMs)
-			m_nLastToggleMs = nNowMs;
+	// Where are we in the pattern? Computed from the start time rather
+	// than by counting toggles, so timer granularity and loop jitter
+	// can't accumulate into drift.
+	unsigned nPhaseMs = nNowMs - m_nPatternStartMs;
+
+	bool bOn = true;
+	switch (Mode) {
+	case LEDEntry:
+		bOn = nPhaseMs % EntryBlinkPeriodMs >= EntryBlinkPeriodMs / 2;
+		break;
+
+	default:
+		break;
 	}
-	m_bBlinking = bEntry;
 
 	if (bOn != m_bLEDOn) {
 		pKeyboard->SetLEDs(bOn ? LED_NUM_LOCK : 0);
