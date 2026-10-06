@@ -32,6 +32,7 @@
 #include <circle/logger.h>     // CLogger, and the LOGNOTICE/LOGDBG/etc. macros
 #include <circle/usb/usbhcidevice.h>
 #include <circle/usb/usbkeyboard.h>
+#include <circle/usb/usbmidi.h>
 #include <assert.h>
 
 #include "spscqueue.h"
@@ -70,6 +71,7 @@ private:
 	CTimer m_Timer;
 	CUSBHCIDevice m_USBHCI;               // declare after m_Timer
 	CUSBKeyboardDevice *volatile m_pKeyboard;
+	CUSBMIDIDevice *volatile m_pMIDI;     // first USB MIDI device found, or 0
 	CSerialDevice m_Serial;
 	CLogger m_Logger;
 
@@ -102,6 +104,7 @@ private:
 	unsigned m_nPatternStartMs;	// when that pattern started
 
 	void AttachKeyboard(void);
+	void AttachMIDI(void);
 	void HandleKey(const TKeyEvent &Event);
 	void SendProgramChange(unsigned nProgram);
 	unsigned NowMs(void);
@@ -112,6 +115,7 @@ private:
 	// no logging, no blocking, just enqueue.
 	static void KeyStatusHandlerRaw(unsigned char ucModifiers, const unsigned char RawKeys[6], void *pContext);
 	static void DeviceRemovedHandler(CDevice *pDevice, void *pContext);
+	static void MIDIRemovedHandler(CDevice *pDevice, void *pContext);
 };
 
 #endif

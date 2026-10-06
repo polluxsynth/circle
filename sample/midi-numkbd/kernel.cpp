@@ -19,6 +19,7 @@
 //
 #include "kernel.h"
 #include "rawkeys.h"
+#include <circle/string.h>
 
 static const char From[] = "kernel";
 
@@ -29,6 +30,9 @@ static const int FirstProgramNumber = 1;
 
 // MIDI channel, 0..15 (0 is "channel 1")
 static const unsigned MidiChannel = 0;
+
+// How many "umidiN" device names to try when looking for a MIDI device
+static const unsigned MaxMIDIDevices = 4;
 
 // LED patterns. Each starts with its dark phase, so a change of mode is
 // visible at once.
@@ -44,6 +48,7 @@ CKernel::CKernel(void): m_Timer(&m_Interrupt),
 			//m_Serial(&m_Interrupt),
 			m_USBHCI(&m_Interrupt, &m_Timer, TRUE),
 			m_pKeyboard(0),
+			m_pMIDI(0),
 			m_Logger(m_Options.GetLogLevel(), &m_Timer),
 			m_Reboot(false),
 			m_PrevKeys{0},
@@ -88,8 +93,12 @@ TShutdownMode CKernel::Run(void)
 	while (!m_Reboot) {
 		boolean bUpdated = m_USBHCI.UpdatePlugAndPlay();
 
-		if (bUpdated && m_pKeyboard == 0)
-			AttachKeyboard();
+		if (bUpdated) {
+			if (m_pKeyboard == 0)
+				AttachKeyboard();
+			if (m_pMIDI == 0)
+				AttachMIDI();
+		}
 
 		// Drain key events queued by the USB callback. All the slow
 		// work (logging, and later MIDI output) happens here.
@@ -139,6 +148,42 @@ void CKernel::AttachKeyboard(void)
 	m_LEDMode = LEDSteady;
 
 	m_pKeyboard = pKeyboard;
+}
+
+// Look for a USB MIDI device. Circle registers each one as "umidi1",
+// "umidi2", ... (numbers are recycled), and we use the first one present.
+// Only output is needed, so no packet handler is registered: any incoming
+// MIDI data is read by the driver and discarded.
+void CKernel::AttachMIDI(void)
+{
+	for (unsigned i = 1; i <= MaxMIDIDevices; i++) {
+		CString Name;
+		Name.Format("umidi%u", i);
+
+		CUSBMIDIDevice *pMIDI = (CUSBMIDIDevice *)
+			m_DeviceNameService.GetDevice(Name, FALSE);
+		if (pMIDI == 0)
+			continue;
+
+		LOGNOTE("MIDI device %s connected", (const char *) Name);
+
+		pMIDI->RegisterRemovedHandler(MIDIRemovedHandler, this);
+		m_pMIDI = pMIDI;
+		return;
+	}
+}
+
+// Called from the USB plug-and-play code when the MIDI device goes away,
+// i.e. from within UpdatePlugAndPlay() in Run(). That is the same context
+// that sends MIDI, so SendProgramChange() cannot be using the pointer
+// while it is cleared.
+void CKernel::MIDIRemovedHandler(CDevice *pDevice, void *pContext)
+{
+	CKernel *pThis = static_cast<CKernel *>(pContext);
+
+	assert(pThis != 0);
+	pThis->m_pMIDI = 0;
+	LOGNOTE("MIDI device removed");
 }
 
 void CKernel::DeviceRemovedHandler(CDevice *pDevice, void *pContext)
@@ -206,11 +251,30 @@ void CKernel::HandleKey(const TKeyEvent &Event)
 		LOGNOTE("Bank lock %s", m_Selector.BankLock() ? "on" : "off");
 }
 
-// TODO: send a real MIDI message; for now just report what would be sent.
+// Send MIDI Program Change (status 0xCn, one data byte) on MidiChannel.
+// Main loop only: the USB bulk transfer behind SendPlainMIDI() blocks
+// (typically around a millisecond) so it must never be called from IRQ
+// context.
 void CKernel::SendProgramChange(unsigned nProgram)
 {
 	LOGNOTE("Program change: channel %u program %u",
 		MidiChannel + 1, nProgram);
+
+	CUSBMIDIDevice *pMIDI = m_pMIDI;
+	if (pMIDI == 0) {
+		LOGWARN("No MIDI device connected, program change not sent");
+		return;
+	}
+
+	assert(nProgram <= 127);
+	const u8 Message[] = {
+		(u8) (0xC0 | (MidiChannel & 0x0F)),
+		(u8) (nProgram & 0x7F)
+	};
+
+	// Cable number 0; the driver wraps the message in a USB-MIDI event packet.
+	if (!pMIDI->SendPlainMIDI(0, Message, sizeof Message))
+		LOGWARN("Sending MIDI program change failed");
 }
 
 // Millisecond count for the selector's timeout. GetTicks() runs at HZ
