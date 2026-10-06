@@ -91,11 +91,13 @@ private:
 	// Only used from the main loop.
 	CProgramSelector m_Selector;
 
-	// NumLock LED feedback: steady on normally, blinking while a number is
-	// being typed. Main loop only.
+	// NumLock LED feedback, main loop only. The pattern shows the mode:
+	//   steady on        normal
+	//   4 Hz blink       a number is being typed
+	enum TLEDMode { LEDSteady, LEDEntry };
 	bool m_bLEDOn;			// state we last sent to the keyboard
-	bool m_bBlinking;		// a number is being entered
-	unsigned m_nLastToggleMs;	// when the LED last changed while blinking
+	TLEDMode m_LEDMode;		// pattern currently shown
+	unsigned m_nPatternStartMs;	// when that pattern started
 
 	void AttachKeyboard(void);
 	void HandleKey(const TKeyEvent &Event);
