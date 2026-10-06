@@ -95,7 +95,8 @@ private:
 
 	// NumLock LED feedback, main loop only. The pattern shows the mode:
 	//   steady on        normal
-	//   4 Hz blink       a number is being typed
+	//   4 Hz blink       a number is being typed, or a bank select (/)
+	//                    is waiting for its digit
 	//   mostly on, with  bank lock is active
 	//   a brief blip off
 	enum TLEDMode { LEDSteady, LEDEntry, LEDBankLock };
@@ -106,7 +107,10 @@ private:
 	void AttachKeyboard(void);
 	void AttachMIDI(void);
 	void HandleKey(const TKeyEvent &Event);
+	void DoAction(const CProgramSelector::TAction &Action);
+	void SendMIDI(const u8 *pMessage, unsigned nLength);
 	void SendProgramChange(unsigned nProgram);
+	void SendBankSelect(unsigned nBank);
 	unsigned NowMs(void);
 	void UpdateLED(void);
 

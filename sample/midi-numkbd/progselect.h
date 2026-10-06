@@ -11,6 +11,12 @@
 //   +  / -   step the last program up/down by one (clamped to 0..127);
 //            any half-typed number is discarded first
 //   NUMLOCK  toggle bank lock (see below); discards any half-typed number
+//   /        bank select: the next digit key sends that bank as a bank
+//            select (CC 32). The wire value is the digit minus the first
+//            bank number, so with a first bank of 1, keys 1-9 send 0-8
+//            and key 0 is ignored. Pressing / again, BS, +, -, NUMLOCK, or
+//            waiting for the timeout cancels it. Any half-typed number is
+//            discarded first. The program number is not touched.
 //
 // In bank lock mode a digit key replaces just the units digit of the current
 // program number and sends it at once: with program 36 selected, pressing 8
@@ -25,8 +31,9 @@
 //     is 127: no digit could follow), or
 //   - no key has been pressed for the timeout (call Tick() regularly).
 //
-// KeyPressed() and Tick() return the program (0..127) to send, or NoChange.
-// The last program sent is remembered, and is the starting point for +/-.
+// KeyPressed() and Tick() return a TAction: a program (0..127) to send, a
+// bank (wire value) to send, or nothing. The last program sent is remembered, and
+// is the starting point for +/-. Bank selects don't change it.
 //
 #ifndef _progselect_h
 #define _progselect_h
@@ -36,7 +43,17 @@
 class CProgramSelector
 {
 public:
-	enum { NoChange = -1 };
+	// What the caller should do after a key press or a tick
+	struct TAction
+	{
+		enum TType { ActNone, ActProgram, ActBank };
+
+		TType Type;
+		int Value;	// wire value to send; unused for ActNone
+
+		bool IsNone(void) const	{ return Type == ActNone; }
+	};
+
 	enum { MaxProgram = 127 };
 	enum { MaxDigits = 3 };
 	enum { DefaultTimeoutMs = 1500 };
@@ -45,57 +62,113 @@ public:
 	// 0 means typed number == wire value, 1 means entry is 1-based (as
 	// most devices display presets) so typing 1..128 sends 0..127.
 	// nInitialProgram is where +/- start from before anything was sent.
+	// nFirstBank is the same for banks: the digit the user presses for
+	// bank wire value 0 (0 or 1).
 	CProgramSelector(int nFirstNumber = 0,
 			 unsigned nTimeoutMs = DefaultTimeoutMs,
-			 int nInitialProgram = 0)
+			 int nInitialProgram = 0,
+			 int nFirstBank = 0)
 	:	m_nFirstNumber(nFirstNumber),
+		m_nFirstBank(nFirstBank),
 		m_nTimeoutMs(nTimeoutMs),
 		m_nLastProgram(Clamp(nInitialProgram)),
 		m_nEntry(0),
 		m_nDigits(0),
 		m_nLastKeyMs(0),
-		m_bBankLock(false)
+		m_bBankLock(false),
+		m_bBankPending(false)
 	{
 	}
 
 	// nNowMs is any free-running millisecond count (wraparound is fine).
-	int KeyPressed(unsigned nKey, unsigned nNowMs)
+	TAction KeyPressed(unsigned nKey, unsigned nNowMs)
 	{
 		if (isNumeric(nKey))
 		{
-			if (m_bBankLock)
-				return BankDigit(keyVal(nKey));
+			// A pending bank select takes the next digit, whatever
+			// the mode, and is then finished.
+			if (m_bBankPending)
+			{
+				m_bBankPending = false;
 
-			return Digit(keyVal(nKey), nNowMs);
+				int nBank = keyVal(nKey) - m_nFirstBank;
+				if (nBank < 0)
+					return None();	// no such bank: ignored
+				return Action(TAction::ActBank, nBank);
+			}
+
+			if (m_bBankLock)
+				return ProgramAction(BankDigit(keyVal(nKey)));
+
+			return ProgramAction(Digit(keyVal(nKey), nNowMs));
 		}
 
 		switch (nKey)
 		{
-		case KEYPAD_NUMLOCK:	Cancel(); m_bBankLock = !m_bBankLock; return NoChange;
-		case KEYPAD_ENTER:	return Commit();
-		case KEYPAD_BS:		Cancel(); return NoChange;
-		case KEYPAD_PLUS:	Cancel(); return Step(+1);
-		case KEYPAD_MINUS:	Cancel(); return Step(-1);
-		default:		return NoChange;
+		case KEYPAD_SLASH:
+		{
+			// Arms bank select; pressed again, it cancels it.
+			bool bWasPending = m_bBankPending;
+			Cancel();
+			m_bBankPending = !bWasPending;
+			m_nLastKeyMs = nNowMs;
+			return None();
+		}
+		case KEYPAD_NUMLOCK:	Cancel(); m_bBankLock = !m_bBankLock; return None();
+		case KEYPAD_ENTER:	return ProgramAction(Commit());
+		case KEYPAD_BS:		Cancel(); return None();
+		case KEYPAD_PLUS:	Cancel(); return ProgramAction(Step(+1));
+		case KEYPAD_MINUS:	Cancel(); return ProgramAction(Step(-1));
+		default:		return None();
 		}
 	}
 
-	// Call regularly; commits a typed number after the idle timeout.
-	int Tick(unsigned nNowMs)
+	// Call regularly; commits a typed number, or drops a pending bank
+	// select, after the idle timeout.
+	TAction Tick(unsigned nNowMs)
 	{
-		if (m_nDigits > 0 && (unsigned) (nNowMs - m_nLastKeyMs) >= m_nTimeoutMs)
-			return Commit();
+		if ((m_nDigits > 0 || m_bBankPending)
+		    && (unsigned) (nNowMs - m_nLastKeyMs) >= m_nTimeoutMs)
+		{
+			if (m_bBankPending)
+			{
+				m_bBankPending = false;
+				return None();
+			}
 
-		return NoChange;
+			return ProgramAction(Commit());
+		}
+
+		return None();
 	}
 
 	// For display/logging
 	int LastProgram(void) const	{ return m_nLastProgram; }
 	bool BankLock(void) const	{ return m_bBankLock; }
+	bool BankSelectPending(void) const { return m_bBankPending; }
 	unsigned EntryDigits(void) const { return m_nDigits; }
 	int EntryNumber(void) const	{ return m_nEntry; }
 
 private:
+	enum { NoChange = -1 };		// internal "no program" result
+
+	static TAction None(void)
+	{
+		return Action(TAction::ActNone, 0);
+	}
+
+	static TAction Action(TAction::TType Type, int nValue)
+	{
+		TAction Result = { Type, nValue };
+		return Result;
+	}
+
+	static TAction ProgramAction(int nProgram)
+	{
+		return nProgram == NoChange ? None()
+					    : Action(TAction::ActProgram, nProgram);
+	}
+
 	int MaxNumber(void) const	{ return MaxProgram + m_nFirstNumber; }
 
 	static int Clamp(int nProgram)
@@ -148,10 +221,12 @@ private:
 		return nProgram;
 	}
 
+	// Abandons both a half-typed number and a pending bank select
 	void Cancel(void)
 	{
 		m_nEntry = 0;
 		m_nDigits = 0;
+		m_bBankPending = false;
 	}
 
 	// Always returns the new program, even if clamped at either end and
@@ -165,12 +240,14 @@ private:
 
 private:
 	int m_nFirstNumber;
+	int m_nFirstBank;
 	unsigned m_nTimeoutMs;
 	int m_nLastProgram;
 	int m_nEntry;
 	unsigned m_nDigits;
 	unsigned m_nLastKeyMs;
 	bool m_bBankLock;
+	bool m_bBankPending;	// "/" pressed, waiting for the bank digit
 };
 
 #endif

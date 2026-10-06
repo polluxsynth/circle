@@ -28,8 +28,17 @@ CKernel *CKernel::s_pThis = 0;
 // value (0..127); 1 = entry is 1-based (1..128), as most devices display it.
 static const int FirstProgramNumber = 1;
 
+// Same for banks: the digit the user presses for bank wire value 0.
+// 0 = keys 0..9 are banks 0..9; 1 = keys 1..9 are banks 1..9 (wire 0..8),
+// and key 0 is ignored.
+static const int FirstBankNumber = 1;
+
 // MIDI channel, 0..15 (0 is "channel 1")
 static const unsigned MidiChannel = 0;
+
+// Controller number used for bank select (32 = Bank Select LSB, as the
+// Prophet Rev2 expects)
+static const u8 BankSelectCC = 32;
 
 // How many "umidiN" device names to try when looking for a MIDI device
 static const unsigned MaxMIDIDevices = 4;
@@ -53,7 +62,9 @@ CKernel::CKernel(void): m_Timer(&m_Interrupt),
 			m_Reboot(false),
 			m_PrevKeys{0},
 			m_nLastDropped(0),
-			m_Selector(FirstProgramNumber),
+			m_Selector(FirstProgramNumber,
+				   CProgramSelector::DefaultTimeoutMs,
+				   0, FirstBankNumber),
 			m_bLEDOn(true),
 			m_LEDMode(LEDSteady),
 			m_nPatternStartMs(0)
@@ -107,9 +118,7 @@ TShutdownMode CKernel::Run(void)
 			HandleKey(Event);
 
 		// Commit a half-typed number once the idle timeout expires
-		int nProgram = m_Selector.Tick(NowMs());
-		if (nProgram != CProgramSelector::NoChange)
-			SendProgramChange(nProgram);
+		DoAction(m_Selector.Tick(NowMs()));
 
 		UpdateLED();
 
@@ -240,41 +249,81 @@ void CKernel::HandleKey(const TKeyEvent &Event)
 	}
 
 	bool bBankLock = m_Selector.BankLock();
+	bool bBankPending = m_Selector.BankSelectPending();
 
-	int nProgram = m_Selector.KeyPressed(Event.ucKey, NowMs());
-	if (nProgram != CProgramSelector::NoChange)
-		SendProgramChange(nProgram);
-	else if (m_Selector.EntryDigits() > 0)
+	CProgramSelector::TAction Action = m_Selector.KeyPressed(Event.ucKey, NowMs());
+	DoAction(Action);
+	if (Action.IsNone() && m_Selector.EntryDigits() > 0)
 		LOGDBG("Entry so far: %d", m_Selector.EntryNumber());
 
 	if (m_Selector.BankLock() != bBankLock)
 		LOGNOTE("Bank lock %s", m_Selector.BankLock() ? "on" : "off");
+	if (m_Selector.BankSelectPending() != bBankPending)
+		LOGDBG("Bank select %s", m_Selector.BankSelectPending() ? "waiting for digit" : "cancelled");
 }
 
-// Send MIDI Program Change (status 0xCn, one data byte) on MidiChannel.
+void CKernel::DoAction(const CProgramSelector::TAction &Action)
+{
+	switch (Action.Type) {
+	case CProgramSelector::TAction::ActProgram:
+		SendProgramChange(Action.Value);
+		break;
+
+	case CProgramSelector::TAction::ActBank:
+		SendBankSelect(Action.Value);
+		break;
+
+	default:
+		break;
+	}
+}
+
+// Send a channel message to the MIDI device, if there is one.
 // Main loop only: the USB bulk transfer behind SendPlainMIDI() blocks
 // (typically around a millisecond) so it must never be called from IRQ
 // context.
+void CKernel::SendMIDI(const u8 *pMessage, unsigned nLength)
+{
+	CUSBMIDIDevice *pMIDI = m_pMIDI;
+	if (pMIDI == 0) {
+		LOGWARN("No MIDI device connected, message not sent");
+		return;
+	}
+
+	// Cable number 0; the driver wraps the message in a USB-MIDI event packet.
+	if (!pMIDI->SendPlainMIDI(0, pMessage, nLength))
+		LOGWARN("Sending MIDI message failed");
+}
+
+// MIDI Program Change: status 0xCn, one data byte.
 void CKernel::SendProgramChange(unsigned nProgram)
 {
 	LOGNOTE("Program change: channel %u program %u",
 		MidiChannel + 1, nProgram);
-
-	CUSBMIDIDevice *pMIDI = m_pMIDI;
-	if (pMIDI == 0) {
-		LOGWARN("No MIDI device connected, program change not sent");
-		return;
-	}
 
 	assert(nProgram <= 127);
 	const u8 Message[] = {
 		(u8) (0xC0 | (MidiChannel & 0x0F)),
 		(u8) (nProgram & 0x7F)
 	};
+	SendMIDI(Message, sizeof Message);
+}
 
-	// Cable number 0; the driver wraps the message in a USB-MIDI event packet.
-	if (!pMIDI->SendPlainMIDI(0, Message, sizeof Message))
-		LOGWARN("Sending MIDI program change failed");
+// MIDI Control Change 32 (Bank Select LSB), which is what the Prophet Rev2
+// uses to select its bank: status 0xBn, controller number, value.
+void CKernel::SendBankSelect(unsigned nBank)
+{
+	LOGNOTE("Bank select: channel %u bank %d (CC %u value %u)",
+		MidiChannel + 1, (int) nBank + FirstBankNumber,
+		(unsigned) BankSelectCC, nBank);
+
+	assert(nBank <= 127);
+	const u8 Message[] = {
+		(u8) (0xB0 | (MidiChannel & 0x0F)),
+		BankSelectCC,
+		(u8) (nBank & 0x7F)
+	};
+	SendMIDI(Message, sizeof Message);
 }
 
 // Millisecond count for the selector's timeout. GetTicks() runs at HZ
@@ -293,11 +342,13 @@ void CKernel::UpdateLED(void)
 	if (pKeyboard == 0)
 		return;
 
+	// Waiting for the user to finish something (digits of a number, or
+	// the digit after /) takes precedence over the bank lock pattern.
 	TLEDMode Mode = LEDSteady;
-	if (m_Selector.BankLock())
-		Mode = LEDBankLock;
-	else if (m_Selector.EntryDigits() > 0)
+	if (m_Selector.EntryDigits() > 0 || m_Selector.BankSelectPending())
 		Mode = LEDEntry;
+	else if (m_Selector.BankLock())
+		Mode = LEDBankLock;
 
 	unsigned nNowMs = NowMs();
 	if (Mode != m_LEDMode) {
