@@ -10,6 +10,15 @@
 //   BS       discard the typed number
 //   +  / -   step the last program up/down by one (clamped to 0..127);
 //            any half-typed number is discarded first
+//   NUMLOCK  toggle bank lock (see below); discards any half-typed number
+//
+// In bank lock mode a digit key replaces just the units digit of the current
+// program number and sends it at once: with program 36 selected, pressing 8
+// selects 38. The tens (the "bank") stay put. A digit that would give a
+// program outside 0..127 (e.g. 8 while on 125) is ignored. ENTER and BS have
+// nothing to act on in this mode; +/- work as usual and move between banks.
+// Numbers are the ones the user types, so with a first number of 1 the
+// "units digit" is that of the 1-based number, not of the wire value.
 //
 // A typed number is also sent automatically when
 //   - it can't be extended into a valid number (e.g. "13" when the maximum
@@ -44,7 +53,8 @@ public:
 		m_nLastProgram(Clamp(nInitialProgram)),
 		m_nEntry(0),
 		m_nDigits(0),
-		m_nLastKeyMs(0)
+		m_nLastKeyMs(0),
+		m_bBankLock(false)
 	{
 	}
 
@@ -52,10 +62,16 @@ public:
 	int KeyPressed(unsigned nKey, unsigned nNowMs)
 	{
 		if (isNumeric(nKey))
+		{
+			if (m_bBankLock)
+				return BankDigit(keyVal(nKey));
+
 			return Digit(keyVal(nKey), nNowMs);
+		}
 
 		switch (nKey)
 		{
+		case KEYPAD_NUMLOCK:	Cancel(); m_bBankLock = !m_bBankLock; return NoChange;
 		case KEYPAD_ENTER:	return Commit();
 		case KEYPAD_BS:		Cancel(); return NoChange;
 		case KEYPAD_PLUS:	Cancel(); return Step(+1);
@@ -75,6 +91,7 @@ public:
 
 	// For display/logging
 	int LastProgram(void) const	{ return m_nLastProgram; }
+	bool BankLock(void) const	{ return m_bBankLock; }
 	unsigned EntryDigits(void) const { return m_nDigits; }
 	int EntryNumber(void) const	{ return m_nEntry; }
 
@@ -99,6 +116,20 @@ private:
 			return Commit();
 
 		return NoChange;
+	}
+
+	// Bank lock: replace the units digit of the current number and send it.
+	int BankDigit(int nDigit)
+	{
+		int nNumber = m_nLastProgram + m_nFirstNumber;
+		nNumber = nNumber / 10 * 10 + nDigit;
+
+		int nProgram = nNumber - m_nFirstNumber;
+		if (nProgram < 0 || nProgram > MaxProgram)
+			return NoChange;	// no such program: ignored
+
+		m_nLastProgram = nProgram;
+		return nProgram;
 	}
 
 	// Send the typed number if it is a valid program, else drop it.
@@ -139,6 +170,7 @@ private:
 	int m_nEntry;
 	unsigned m_nDigits;
 	unsigned m_nLastKeyMs;
+	bool m_bBankLock;
 };
 
 #endif

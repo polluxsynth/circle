@@ -94,7 +94,9 @@ private:
 	// NumLock LED feedback, main loop only. The pattern shows the mode:
 	//   steady on        normal
 	//   4 Hz blink       a number is being typed
-	enum TLEDMode { LEDSteady, LEDEntry };
+	//   mostly on, with  bank lock is active
+	//   a brief blip off
+	enum TLEDMode { LEDSteady, LEDEntry, LEDBankLock };
 	bool m_bLEDOn;			// state we last sent to the keyboard
 	TLEDMode m_LEDMode;		// pattern currently shown
 	unsigned m_nPatternStartMs;	// when that pattern started

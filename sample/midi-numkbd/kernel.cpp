@@ -194,11 +194,16 @@ void CKernel::HandleKey(const TKeyEvent &Event)
 		return;
 	}
 
+	bool bBankLock = m_Selector.BankLock();
+
 	int nProgram = m_Selector.KeyPressed(Event.ucKey, NowMs());
 	if (nProgram != CProgramSelector::NoChange)
 		SendProgramChange(nProgram);
 	else if (m_Selector.EntryDigits() > 0)
 		LOGDBG("Entry so far: %d", m_Selector.EntryNumber());
+
+	if (m_Selector.BankLock() != bBankLock)
+		LOGNOTE("Bank lock %s", m_Selector.BankLock() ? "on" : "off");
 }
 
 // TODO: send a real MIDI message; for now just report what would be sent.
@@ -225,7 +230,9 @@ void CKernel::UpdateLED(void)
 		return;
 
 	TLEDMode Mode = LEDSteady;
-	if (m_Selector.EntryDigits() > 0)
+	if (m_Selector.BankLock())
+		Mode = LEDBankLock;
+	else if (m_Selector.EntryDigits() > 0)
 		Mode = LEDEntry;
 
 	unsigned nNowMs = NowMs();
@@ -243,6 +250,10 @@ void CKernel::UpdateLED(void)
 	switch (Mode) {
 	case LEDEntry:
 		bOn = nPhaseMs % EntryBlinkPeriodMs >= EntryBlinkPeriodMs / 2;
+		break;
+
+	case LEDBankLock:
+		bOn = nPhaseMs % BankLockPeriodMs >= BankLockOffMs;
 		break;
 
 	default:
