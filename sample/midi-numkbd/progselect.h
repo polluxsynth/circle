@@ -12,7 +12,7 @@
 //            any half-typed number is discarded first
 //   NUMLOCK  toggle bank lock (see below); discards any half-typed number
 //   /        bank select: the next digit key sends that bank as a bank
-//            select (CC 32). The wire value is the digit minus the first
+//            select (by default CC 32). The wire value is the digit minus the first
 //            bank number, so with a first bank of 1, keys 1-9 send 0-8
 //            and key 0 is ignored. Pressing / again, BS, +, -, NUMLOCK, or
 //            waiting for the timeout cancels it. Any half-typed number is
