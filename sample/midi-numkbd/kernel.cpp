@@ -52,8 +52,7 @@ boolean CKernel::Initialize(void)
 	if (bOK)
 		bOK = m_USBHCI.Initialize();
 
-	m_ActLED.Blink(5);
-	CTimer::SimpleMsDelay(600);
+	m_ActLED.Blink(2);
 
 	return bOK;
 }
@@ -61,6 +60,7 @@ boolean CKernel::Initialize(void)
 TShutdownMode CKernel::Run(void)
 {
 	LOGDBG("MIDI Numkbd starting up\n");
+	m_ActLED.On();
 
 	for (;;) {
 		boolean bUpdated = m_USBHCI.UpdatePlugAndPlay();
