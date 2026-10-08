@@ -37,6 +37,7 @@
 
 #include "spscqueue.h"
 #include "progselect.h"
+#include "settings.h"
 
 // A key press, queued from the USB interrupt path for the main loop
 struct TKeyEvent
@@ -65,6 +66,7 @@ public:
 private:
 	CActLED m_ActLED;
 	CKernelOptions m_Options;
+	CSettings m_Settings;                 // from m_Options; declare before m_Selector
 	CDeviceNameService m_DeviceNameService;
 	CExceptionHandler m_Exception;
 	CInterruptSystem m_Interrupt;

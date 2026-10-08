@@ -24,21 +24,8 @@
 static const char From[] = "kernel";
 
 CKernel *CKernel::s_pThis = 0;
-// Number the user types for MIDI program 0: 0 = typed number is the wire
-// value (0..127); 1 = entry is 1-based (1..128), as most devices display it.
-static const int FirstProgramNumber = 1;
-
-// Same for banks: the digit the user presses for bank wire value 0.
-// 0 = keys 0..9 are banks 0..9; 1 = keys 1..9 are banks 1..9 (wire 0..8),
-// and key 0 is ignored.
-static const int FirstBankNumber = 1;
-
-// MIDI channel, 0..15 (0 is "channel 1")
-static const unsigned MidiChannel = 0;
-
-// Controller number used for bank select (32 = Bank Select LSB, as the
-// Prophet Rev2 expects)
-static const u8 BankSelectCC = 32;
+// The user-configurable settings (program/bank numbering, bank select CC,
+// MIDI channel) are read from cmdline.txt: see settings.h.
 
 // How many "umidiN" device names to try when looking for a MIDI device
 static const unsigned MaxMIDIDevices = 4;
@@ -53,7 +40,8 @@ static const unsigned EntryBlinkPeriodMs = 250;
 static const unsigned BankLockPeriodMs = 1000;
 static const unsigned BankLockOffMs = 150;
 
-CKernel::CKernel(void): m_Timer(&m_Interrupt),
+CKernel::CKernel(void): m_Settings(m_Options),
+			m_Timer(&m_Interrupt),
 			//m_Serial(&m_Interrupt),
 			m_USBHCI(&m_Interrupt, &m_Timer, TRUE),
 			m_pKeyboard(0),
@@ -62,9 +50,9 @@ CKernel::CKernel(void): m_Timer(&m_Interrupt),
 			m_Reboot(false),
 			m_PrevKeys{0},
 			m_nLastDropped(0),
-			m_Selector(FirstProgramNumber,
+			m_Selector(m_Settings.FirstProgramNumber,
 				   CProgramSelector::DefaultTimeoutMs,
-				   0, FirstBankNumber),
+				   0, m_Settings.FirstBankNumber),
 			m_bLEDOn(true),
 			m_LEDMode(LEDSteady),
 			m_nPatternStartMs(0)
@@ -84,6 +72,8 @@ boolean CKernel::Initialize(void)
 		bOK = m_Serial.Initialize(115200);
 	if (bOK)
 		bOK = m_Logger.Initialize(&m_Serial);
+	if (bOK)
+		m_Settings.Report();
 	if (bOK)
 		bOK = m_Interrupt.Initialize();
 	if (bOK)
@@ -299,28 +289,28 @@ void CKernel::SendMIDI(const u8 *pMessage, unsigned nLength)
 void CKernel::SendProgramChange(unsigned nProgram)
 {
 	LOGNOTE("Program change: channel %u program %u",
-		MidiChannel + 1, nProgram);
+		m_Settings.MidiChannel + 1, nProgram);
 
 	assert(nProgram <= 127);
 	const u8 Message[] = {
-		(u8) (0xC0 | (MidiChannel & 0x0F)),
+		(u8) (0xC0 | (m_Settings.MidiChannel & 0x0F)),
 		(u8) (nProgram & 0x7F)
 	};
 	SendMIDI(Message, sizeof Message);
 }
 
-// MIDI Control Change 32 (Bank Select LSB), which is what the Prophet Rev2
-// uses to select its bank: status 0xBn, controller number, value.
+// MIDI Control Change used for bank select (32, Bank Select LSB, by default,
+// which is what the Prophet Rev2 uses): status 0xBn, controller number, value.
 void CKernel::SendBankSelect(unsigned nBank)
 {
 	LOGNOTE("Bank select: channel %u bank %d (CC %u value %u)",
-		MidiChannel + 1, (int) nBank + FirstBankNumber,
-		(unsigned) BankSelectCC, nBank);
+		m_Settings.MidiChannel + 1, (int) nBank + m_Settings.FirstBankNumber,
+		(unsigned) m_Settings.BankSelectCC, nBank);
 
 	assert(nBank <= 127);
 	const u8 Message[] = {
-		(u8) (0xB0 | (MidiChannel & 0x0F)),
-		BankSelectCC,
+		(u8) (0xB0 | (m_Settings.MidiChannel & 0x0F)),
+		m_Settings.BankSelectCC,
 		(u8) (nBank & 0x7F)
 	};
 	SendMIDI(Message, sizeof Message);
