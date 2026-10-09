@@ -4,9 +4,11 @@
 // The settings mode: a way to change settings from the numpad. Header-only
 // and free of Circle dependencies so it can be tested on a host machine.
 //
-// * is a shift key. Holding it while pressing a digit starts the mode for
-// the setting with that number (the caller sees the chord and calls
-// Begin()). Then * can be let go, and:
+// * is a shift key. Holding it, and then pressing a digit, starts the mode
+// for the setting with that number (the caller sees the shifted digit and
+// calls Begin()). * must go down first; a digit pressed together with it, or
+// before it, or after it has been let go, is just a digit. Then * can be
+// let go, and:
 //
 //   <value> ENTER    sets the setting; the mode then ends
 //   ENTER            with no value typed: read the setting back (the kernel

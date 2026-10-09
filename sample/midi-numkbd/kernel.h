@@ -47,7 +47,7 @@ struct TKeyEvent
 {
 	unsigned char ucKey;		// raw USB HID usage code
 	unsigned char ucModifiers;	// modifier bits at the time of the press
-	bool bShift;			// * was held down when the key went down
+	bool bShift;			// * was already held down when the key went down
 };
 
 enum TShutdownMode
@@ -100,8 +100,8 @@ private:
 	// Only used from the main loop.
 	CProgramSelector m_Selector;
 
-	// Settings mode: entered with * held down and a digit (see
-	// settingsmode.h). Main loop only.
+	// Settings mode: entered by pressing a digit while * is held down
+	// (see settingsmode.h). Main loop only.
 	CSettingsMode m_SettingsMode;
 
 	// One-shot LED sequence (acknowledgement, value readback), shown in

@@ -9,11 +9,10 @@
 // one to find the keys that have just gone down.
 //
 // * is a shift key: it never produces an event of its own. Instead, each
-// key that goes down while * is held is marked as shifted. "While held"
-// means * is in the same report as the new key, so it doesn't matter
-// whether * went down first, or in the very same report (in which case
-// it may well come later in the report than the key). A key that went
-// down before * was pressed is not shifted.
+// key that goes down while * is held is marked as shifted. For that, * must
+// have gone down before the key: it has to be in the previous report as well
+// as the current one. So a key pressed together with * (in the same
+// report), or before it, is not shifted, nor is one pressed as * is let go.
 //
 #ifndef _keyreports_h
 #define _keyreports_h
@@ -48,10 +47,17 @@ public:
 			if (RawKeys[i] == 1)
 				return;
 
-		bool bShift = false;
+		// Shifted only if * was already down, and still is
+		bool bStarNow = false;
+		bool bStarBefore = false;
 		for (unsigned i = 0; i < 6; i++)
+		{
 			if (RawKeys[i] == KEYPAD_STAR)
-				bShift = true;
+				bStarNow = true;
+			if (m_Prev[i] == KEYPAD_STAR)
+				bStarBefore = true;
+		}
+		bool bShift = bStarNow && bStarBefore;
 
 		for (unsigned i = 0; i < 6; i++)
 		{
