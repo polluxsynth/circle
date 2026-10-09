@@ -104,7 +104,7 @@ private:
 	// (see settingsmode.h). Main loop only.
 	CSettingsMode m_SettingsMode;
 
-	// One-shot LED sequence (acknowledgement, value readback), shown in
+	// One-shot LED sequence (acknowledgement), shown in
 	// place of the mode pattern while it plays.
 	CBlinkSequence m_Blink;
 
@@ -132,7 +132,6 @@ private:
 	void UpdateLED(void);
 	void DoSettingsAction(const CSettingsMode::TAction &Action);
 	bool ApplySetting(int nSetting, int nValue);
-	int SettingValue(int nSetting);
 
 	// USB callbacks. Static because Circle takes plain function pointers.
 	// KeyStatusHandlerRaw may run in interrupt context: keep it short,

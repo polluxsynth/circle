@@ -365,7 +365,7 @@ void CKernel::UpdateLED(void)
 
 	bool bOn = true;
 	if (m_Blink.Active(nNowMs)) {
-		// An acknowledgement or a readback is playing: it takes the
+		// An acknowledgement is playing: it takes the
 		// LED over from the mode pattern until it is done.
 		bOn = m_Blink.IsOn(nNowMs);
 	} else {
@@ -408,13 +408,6 @@ void CKernel::DoSettingsAction(const CSettingsMode::TAction &Action)
 		m_Blink.Start(NowMs());
 		break;
 
-	case CSettingsMode::TAction::ActReadBack: {
-		int nValue = SettingValue(Action.Setting);
-		LOGNOTE("Settings: setting %d is %d", Action.Setting, nValue);
-		m_Blink.BuildNumber(nValue);
-		m_Blink.Start(NowMs());
-		} break;
-
 	case CSettingsMode::TAction::ActExit:
 		LOGNOTE("Settings mode off");
 		m_Blink.Clear();
@@ -438,17 +431,5 @@ bool CKernel::ApplySetting(int nSetting, int nValue)
 
 	default:
 		return false;
-	}
-}
-
-// The current value of a setting, as the user numbers it
-int CKernel::SettingValue(int nSetting)
-{
-	switch (nSetting) {
-	case CSettingsMode::SettingMidiChannel:
-		return (int) m_Settings.MidiChannelNumber();
-
-	default:
-		return 0;
 	}
 }

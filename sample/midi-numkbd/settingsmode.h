@@ -11,8 +11,6 @@
 // let go, and:
 //
 //   <value> ENTER    sets the setting; the mode then ends
-//   ENTER            with no value typed: read the setting back (the kernel
-//                    blinks the value out); the mode then ends
 //   BS               cancels; the mode ends
 //
 // For example, * held and 1, then 1 2 ENTER, sets setting 1 (the MIDI
@@ -24,8 +22,9 @@
 //
 // A value that is out of range is rejected as soon as it can no longer be
 // valid (so 1 7 for the channel is refused at the 7), or at ENTER if it is
-// too small. After a rejection the mode stays on, with the typed digits
-// cleared, ready for the value to be typed again. A chord for a setting
+// too small, or if no value has been typed at all. After a rejection the
+// mode stays on, with the typed digits cleared, ready for the value to be
+// typed again. A chord for a setting
 // that doesn't exist is rejected and doesn't start the mode.
 //
 // Settings:
@@ -50,7 +49,6 @@ public:
 			ActNone,
 			ActSet,		// set Setting to Value (already range-checked)
 			ActRejected,	// bad setting number or value
-			ActReadBack,	// show the current value of Setting
 			ActExit		// the mode has ended without doing anything
 		};
 
@@ -127,15 +125,10 @@ public:
 			int nValue = m_nValue;
 			unsigned nDigits = m_nDigits;
 
-			if (nDigits == 0)
-			{
-				Finish();
-				return Action(TAction::ActReadBack, nSetting, 0);
-			}
-
+			// No digits typed is no value
 			int nMin, nMax;
 			Range(nSetting, &nMin, &nMax);
-			if (nValue < nMin || nValue > nMax)
+			if (nDigits == 0 || nValue < nMin || nValue > nMax)
 			{
 				ClearDigits();
 				return Action(TAction::ActRejected, nSetting, nValue);

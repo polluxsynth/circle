@@ -2,8 +2,8 @@
 // blinkseq.h
 //
 // A one-shot LED sequence: a list of timed on/off segments, played once
-// from a start time. Used for the acknowledgements and the value readback
-// of the settings mode, since the NumLock LED is the only output there is.
+// from a start time. Used for the acknowledgements of the settings mode,
+// since the NumLock LED is the only output there is.
 // Header-only and free of Circle dependencies so it can be tested on a
 // host machine.
 //
@@ -15,11 +15,6 @@
 //
 //   accepted   a rapid flicker: 4 flashes of 60 ms (half a second)
 //   rejected   dark for 1.2 seconds
-//   number     dark for 0.7 s, then the digits of the number, most
-//              significant first: a digit N is N flashes (0.2 s on,
-//              0.25 s off between), and a 0 is one long flash (0.8 s);
-//              there is 0.8 s of dark between digits. 12, for instance, is
-//              one flash, a pause, then two flashes.
 //
 #ifndef _blinkseq_h
 #define _blinkseq_h
@@ -27,8 +22,7 @@
 class CBlinkSequence
 {
 public:
-	// Enough for a number of 3 digits, all of them 9s, with some to spare
-	enum { MaxSegments = 64 };
+	enum { MaxSegments = 16 };
 
 	CBlinkSequence(void)
 	:	m_nCount(0),
@@ -57,40 +51,6 @@ public:
 	{
 		Clear();
 		Add(false, 1200);
-	}
-
-	void BuildNumber(int nNumber)
-	{
-		Clear();
-		Add(false, 700);
-
-		if (nNumber < 0)
-			nNumber = 0;
-
-		int nDivisor = 1;
-		while (nNumber / nDivisor >= 10)
-			nDivisor *= 10;
-
-		for (bool bFirst = true; nDivisor > 0; nDivisor /= 10, bFirst = false)
-		{
-			int nDigit = nNumber / nDivisor % 10;
-
-			if (!bFirst)
-				Add(false, 800);
-
-			if (nDigit == 0)
-			{
-				Add(true, 800);
-				continue;
-			}
-
-			for (int i = 0; i < nDigit; i++)
-			{
-				if (i > 0)
-					Add(false, 250);
-				Add(true, 200);
-			}
-		}
 	}
 
 	// Starts playing what was built, at nNowMs (any free-running
