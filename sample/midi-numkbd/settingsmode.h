@@ -16,6 +16,12 @@
 // For example, * held and 1, then 1 2 ENTER, sets setting 1 (the MIDI
 // channel) to 12. Holding * all the way through works too.
 //
+// Setting 0 is not a value but an action, reboot:
+// Hold * and press 0 to arm, then DEL to actually reboot. DEL is selected
+// so that the habit of confirming with ENTER can't reboot by mistake;
+// BS backs out. The two steps are separate so that no more than two keys
+// are ever down together, which even a keypad with poor key rollover can do.
+//
 // All other keys are ignored, and nothing is sent to the MIDI device
 // while the mode is on. The mode also ends by itself after the timeout
 // with no key pressed.
@@ -28,6 +34,7 @@
 // that doesn't exist is rejected and doesn't start the mode.
 //
 // Settings:
+//   0   reboot (an action: see above)
 //   1   MIDI channel, 1..16 (as numbered on the device)
 //
 // Begin(), KeyPressed() and Tick() return a TAction telling the caller what
@@ -49,6 +56,7 @@ public:
 			ActNone,
 			ActSet,		// set Setting to Value (already range-checked)
 			ActRejected,	// bad setting number or value
+			ActReboot,	// reboot now
 			ActExit		// the mode has ended without doing anything
 		};
 
@@ -58,6 +66,7 @@ public:
 	};
 
 	// Setting numbers
+	enum { SettingReboot = 0 };
 	enum { SettingMidiChannel = 1 };
 
 	enum { MaxDigits = 3 };
@@ -80,7 +89,7 @@ public:
 	TAction Begin(int nSetting, unsigned nNowMs)
 	{
 		int nMin, nMax;
-		if (!Range(nSetting, &nMin, &nMax))
+		if (nSetting != SettingReboot && !Range(nSetting, &nMin, &nMax))
 			return Action(TAction::ActRejected, nSetting, 0);
 
 		m_bActive = true;
@@ -98,6 +107,25 @@ public:
 			return None();
 
 		m_nLastKeyMs = nNowMs;
+
+		// The reboot takes no value: DEL does it, BS backs out, and
+		// that is all.
+		if (m_nSetting == SettingReboot)
+		{
+			if (nKey == KEYPAD_DEL)
+			{
+				Finish();
+				return Action(TAction::ActReboot, SettingReboot, 0);
+			}
+
+			if (nKey == KEYPAD_BS)
+			{
+				Finish();
+				return Action(TAction::ActExit, 0, 0);
+			}
+
+			return None();
+		}
 
 		if (isNumeric(nKey))
 		{
