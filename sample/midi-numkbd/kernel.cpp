@@ -40,6 +40,14 @@ static const unsigned EntryBlinkPeriodMs = 250;
 static const unsigned BankLockPeriodMs = 1000;
 static const unsigned BankLockOffMs = 150;
 
+// In the settings mode, waiting for a setting number: two blips off, each
+// 100 ms long and 100 ms apart, once a second.
+static const unsigned SettingsPeriodMs = 1000;
+static const unsigned SettingsBlipMs = 100;
+
+// How long * must be held down to enter the settings mode
+static const unsigned StarHoldMs = 2000;
+
 CKernel::CKernel(void): m_Settings(m_Options),
 			m_Timer(&m_Interrupt),
 			//m_Serial(&m_Interrupt),
@@ -49,10 +57,15 @@ CKernel::CKernel(void): m_Settings(m_Options),
 			m_Logger(m_Options.GetLogLevel(), &m_Timer),
 			m_Reboot(false),
 			m_PrevKeys{0},
+			m_bStarHeld(false),
 			m_nLastDropped(0),
 			m_Selector(m_Settings.FirstProgramNumber,
 				   CProgramSelector::DefaultTimeoutMs,
 				   0, m_Settings.FirstBankNumber),
+			m_SettingsMode(),
+			m_bStarTiming(false),
+			m_nStarDownMs(0),
+			m_Blink(),
 			m_bLEDOn(true),
 			m_LEDMode(LEDSteady),
 			m_nPatternStartMs(0)
@@ -110,6 +123,11 @@ TShutdownMode CKernel::Run(void)
 		// Commit a half-typed number once the idle timeout expires
 		DoAction(m_Selector.Tick(NowMs()));
 
+		// Settings mode: a long press of * gets in, and it times out
+		// by itself when left alone.
+		CheckStarHold();
+		DoSettingsAction(m_SettingsMode.Tick(NowMs()));
+
 		UpdateLED();
 
 		unsigned nDropped = m_KeyQueue.Dropped();
@@ -139,6 +157,8 @@ void CKernel::AttachKeyboard(void)
 	// to avoid race with the callback.
 	for (int i = 0; i < 6; i++)
 		m_PrevKeys[i] = 0;
+	m_bStarHeld = false;
+	m_bStarTiming = false;
 
 	pKeyboard->RegisterRemovedHandler(DeviceRemovedHandler, this);
 	pKeyboard->RegisterKeyStatusHandlerRaw(KeyStatusHandlerRaw, FALSE, this);
@@ -191,6 +211,10 @@ void CKernel::DeviceRemovedHandler(CDevice *pDevice, void *pContext)
 
 	assert(pThis != 0);
 	pThis->m_pKeyboard = 0;
+
+	// A key held down when the numpad is unplugged is never released
+	pThis->m_bStarHeld = false;
+	pThis->m_bStarTiming = false;
 	LOGDBG("Numpad removed");
 }
 
@@ -209,6 +233,15 @@ void CKernel::KeyStatusHandlerRaw(unsigned char ucModifiers, const unsigned char
 	for (unsigned i = 0; i < 6; i++)
 		if (RawKeys[i] == 1)
 			return;
+
+	// Is * down? The main loop times a long press of it. Set before the
+	// press event is queued below, so the main loop never sees the event
+	// without the flag.
+	bool bStar = false;
+	for (unsigned i = 0; i < 6; i++)
+		if (RawKeys[i] == KEYPAD_STAR)
+			bStar = true;
+	pThis->m_bStarHeld = bStar;
 
 	for (unsigned i = 0; i < 6; i++)
 	{
@@ -235,6 +268,21 @@ void CKernel::HandleKey(const TKeyEvent &Event)
 
 	if (Event.ucKey == KEYPAD_TAB) {
 		m_Reboot = true;
+		return;
+	}
+
+	// In the settings mode the keys are the mode's, not the selector's
+	if (m_SettingsMode.Active()) {
+		m_Blink.Clear();	// any key cuts short a sequence still playing
+		DoSettingsAction(m_SettingsMode.KeyPressed(Event.ucKey, NowMs()));
+		return;
+	}
+
+	// * does nothing by itself; held for StarHoldMs it enters the
+	// settings mode (see CheckStarHold).
+	if (Event.ucKey == KEYPAD_STAR) {
+		m_nStarDownMs = NowMs();
+		m_bStarTiming = true;
 		return;
 	}
 
@@ -335,7 +383,9 @@ void CKernel::UpdateLED(void)
 	// Waiting for the user to finish something (digits of a number, or
 	// the digit after /) takes precedence over the bank lock pattern.
 	TLEDMode Mode = LEDSteady;
-	if (m_Selector.EntryDigits() > 0 || m_Selector.BankSelectPending())
+	if (m_SettingsMode.Active())
+		Mode = m_SettingsMode.ValueEntry() ? LEDEntry : LEDSettings;
+	else if (m_Selector.EntryDigits() > 0 || m_Selector.BankSelectPending())
 		Mode = LEDEntry;
 	else if (m_Selector.BankLock())
 		Mode = LEDBankLock;
@@ -352,21 +402,124 @@ void CKernel::UpdateLED(void)
 	unsigned nPhaseMs = nNowMs - m_nPatternStartMs;
 
 	bool bOn = true;
-	switch (Mode) {
-	case LEDEntry:
-		bOn = nPhaseMs % EntryBlinkPeriodMs >= EntryBlinkPeriodMs / 2;
-		break;
+	if (m_Blink.Active(nNowMs)) {
+		// An acknowledgement or a readback is playing: it takes the
+		// LED over from the mode pattern until it is done.
+		bOn = m_Blink.IsOn(nNowMs);
+	} else {
+		switch (Mode) {
+		case LEDEntry:
+			bOn = nPhaseMs % EntryBlinkPeriodMs >= EntryBlinkPeriodMs / 2;
+			break;
 
-	case LEDBankLock:
-		bOn = nPhaseMs % BankLockPeriodMs >= BankLockOffMs;
-		break;
+		case LEDBankLock:
+			bOn = nPhaseMs % BankLockPeriodMs >= BankLockOffMs;
+			break;
 
-	default:
-		break;
+		case LEDSettings: {
+			unsigned nPhase = nPhaseMs % SettingsPeriodMs;
+			bOn = !(   nPhase < SettingsBlipMs
+				|| (nPhase >= 2 * SettingsBlipMs && nPhase < 3 * SettingsBlipMs));
+			}
+			break;
+
+		default:
+			break;
+		}
 	}
 
 	if (bOn != m_bLEDOn) {
 		pKeyboard->SetLEDs(bOn ? LED_NUM_LOCK : 0);
 		m_bLEDOn = bOn;
+	}
+}
+
+// Times a long press of *. The press event arrives through the key queue
+// (HandleKey starts the timing); whether * is still down comes from the
+// flag the USB callback maintains. Releasing early makes it a plain tap,
+// which does nothing.
+void CKernel::CheckStarHold(void)
+{
+	if (!m_bStarTiming)
+		return;
+
+	if (!m_bStarHeld) {
+		m_bStarTiming = false;
+		return;
+	}
+
+	if (NowMs() - m_nStarDownMs < StarHoldMs)
+		return;
+
+	// Enter the mode. The LED changing to its pattern tells the user to
+	// let go; that release is not an event, so it is not mistaken for the
+	// tap that leaves the mode.
+	m_bStarTiming = false;
+	m_Blink.Clear();
+	m_SettingsMode.Enter(NowMs());
+	LOGNOTE("Settings mode on");
+}
+
+// Carries out what the settings mode decided, and gives the feedback
+// (there is no display; the NumLock LED is all there is).
+void CKernel::DoSettingsAction(const CSettingsMode::TAction &Action)
+{
+	switch (Action.Type) {
+	case CSettingsMode::TAction::ActSet:
+		if (ApplySetting(Action.Setting, Action.Value))
+			m_Blink.BuildAccepted();
+		else
+			m_Blink.BuildRejected();
+		m_Blink.Start(NowMs());
+		break;
+
+	case CSettingsMode::TAction::ActRejected:
+		LOGNOTE("Settings: rejected");
+		m_Blink.BuildRejected();
+		m_Blink.Start(NowMs());
+		break;
+
+	case CSettingsMode::TAction::ActReadBack: {
+		int nValue = SettingValue(Action.Setting);
+		LOGNOTE("Settings: setting %d is %d", Action.Setting, nValue);
+		m_Blink.BuildNumber(nValue);
+		m_Blink.Start(NowMs());
+		} break;
+
+	case CSettingsMode::TAction::ActExit:
+		LOGNOTE("Settings mode off");
+		m_Blink.Clear();
+		break;
+
+	default:
+		break;
+	}
+}
+
+// Changes a setting while running; false if there is no such setting or
+// the value is not valid for it.
+bool CKernel::ApplySetting(int nSetting, int nValue)
+{
+	switch (nSetting) {
+	case CSettingsMode::SettingMidiChannel:
+		if (!m_Settings.SetMidiChannel(nValue))
+			return false;
+		LOGNOTE("MIDI channel is now %u", m_Settings.MidiChannelNumber());
+		return true;
+
+	default:
+		return false;
+	}
+}
+
+// The current value of a setting, as the user numbers it
+int CKernel::SettingValue(int nSetting)
+{
+	switch (nSetting) {
+	case CSettingsMode::SettingMidiChannel:
+		return (int) m_Settings.MidiChannelNumber();
+
+	default:
+		return 0;
 	}
 }
