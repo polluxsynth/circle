@@ -221,11 +221,6 @@ void CKernel::HandleKey(const TKeyEvent &Event)
 	LOGDBG("Key down: Modifier 0x%02X Code 0x%02X",
 		(unsigned) Event.ucModifiers, (unsigned) Event.ucKey);
 
-	if (Event.ucKey == KEYPAD_TAB) {
-		m_Reboot = true;
-		return;
-	}
-
 	// In the settings mode the keys are the mode's, not the selector's.
 	// (Holding * on while typing the value is fine: the shift flag is
 	// only looked at below, when the mode is off.)
@@ -406,6 +401,11 @@ void CKernel::DoSettingsAction(const CSettingsMode::TAction &Action)
 		LOGNOTE("Settings: rejected");
 		m_Blink.BuildRejected();
 		m_Blink.Start(NowMs());
+		break;
+
+	case CSettingsMode::TAction::ActReboot:
+		LOGNOTE("Settings: reboot requested");
+		m_Reboot = true;
 		break;
 
 	case CSettingsMode::TAction::ActExit:
