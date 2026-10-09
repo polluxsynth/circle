@@ -37,6 +37,7 @@
 
 #include "spscqueue.h"
 #include "progselect.h"
+#include "keyreports.h"
 #include "settings.h"
 #include "settingsmode.h"
 #include "blinkseq.h"
@@ -46,6 +47,7 @@ struct TKeyEvent
 {
 	unsigned char ucKey;		// raw USB HID usage code
 	unsigned char ucModifiers;	// modifier bits at the time of the press
+	bool bShift;			// * was held down when the key went down
 };
 
 enum TShutdownMode
@@ -81,14 +83,10 @@ private:
 
 	bool m_Reboot; // Set (from the main loop only) to make Run() exit
 
-	// Previous raw report, used to detect new presses. Touched only by
-	// the USB callback (IRQ context) once the handler is registered.
-	unsigned char m_PrevKeys[6];
-
-	// True while the * key is down in the latest report. Written by the
-	// USB callback (IRQ context), read by the main loop, which uses it
-	// to time a long press of *.
-	volatile bool m_bStarHeld;
+	// Turns raw reports into key presses (and handles the * shift key).
+	// Touched only by the USB callback (IRQ context) once the handler
+	// is registered.
+	CKeyReportDecoder m_KeyDecoder;
 	// Fake a 'this' pointer for static callbacks, in the case they don't
 	// have a context pointer where 'this' can be passed.
 	// We can probably remove this eventually.
@@ -102,11 +100,9 @@ private:
 	// Only used from the main loop.
 	CProgramSelector m_Selector;
 
-	// Settings mode: entered by holding * down for a couple of seconds
-	// (see settingsmode.h). Main loop only.
+	// Settings mode: entered with * held down and a digit (see
+	// settingsmode.h). Main loop only.
 	CSettingsMode m_SettingsMode;
-	bool m_bStarTiming;		// a press of * is being timed
-	unsigned m_nStarDownMs;		// ... and began at this time
 
 	// One-shot LED sequence (acknowledgement, value readback), shown in
 	// place of the mode pattern while it plays.
@@ -115,14 +111,12 @@ private:
 	// NumLock LED feedback, main loop only. The pattern shows the mode:
 	//   steady on        normal
 	//   4 Hz blink       a number is being typed, or a bank select (/)
-	//                    is waiting for its digit; also in the settings
-	//                    mode, while the value of a setting is typed
+	//                    is waiting for its digit, or a setting value is
+	//                    being typed in the settings mode
 	//   mostly on, with  bank lock is active
 	//   a brief blip off
-	//   mostly on, with  settings mode, waiting for a setting number
-	//   two blips off
 	// On top of those, a one-shot sequence (m_Blink) can play: see blinkseq.h.
-	enum TLEDMode { LEDSteady, LEDEntry, LEDBankLock, LEDSettings };
+	enum TLEDMode { LEDSteady, LEDEntry, LEDBankLock };
 	bool m_bLEDOn;			// state we last sent to the keyboard
 	TLEDMode m_LEDMode;		// pattern currently shown
 	unsigned m_nPatternStartMs;	// when that pattern started
@@ -136,7 +130,6 @@ private:
 	void SendBankSelect(unsigned nBank);
 	unsigned NowMs(void);
 	void UpdateLED(void);
-	void CheckStarHold(void);
 	void DoSettingsAction(const CSettingsMode::TAction &Action);
 	bool ApplySetting(int nSetting, int nValue);
 	int SettingValue(int nSetting);

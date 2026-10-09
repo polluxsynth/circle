@@ -4,16 +4,17 @@
 // The settings mode: a way to change settings from the numpad. Header-only
 // and free of Circle dependencies so it can be tested on a host machine.
 //
-// Getting in is the caller's business (the kernel enters the mode when *
-// has been held down for a couple of seconds); Enter() switches it on.
-// Then:
+// * is a shift key. Holding it while pressing a digit starts the mode for
+// the setting with that number (the caller sees the chord and calls
+// Begin()). Then * can be let go, and:
 //
-//   <setting> <value> ENTER    set a setting, e.g.  1 1 2 ENTER  sets
-//                              setting 1 (the MIDI channel) to 12
-//   <setting> ENTER            read it back (the kernel blinks the value)
-//   BS                         while typing a value: back to choosing a
-//                              setting; when choosing: leave the mode
-//   *                          leave the mode
+//   <value> ENTER    sets the setting; the mode then ends
+//   ENTER            with no value typed: read the setting back (the kernel
+//                    blinks the value out); the mode then ends
+//   BS               cancels; the mode ends
+//
+// For example, * held and 1, then 1 2 ENTER, sets setting 1 (the MIDI
+// channel) to 12. Holding * all the way through works too.
 //
 // All other keys are ignored, and nothing is sent to the MIDI device
 // while the mode is on. The mode also ends by itself after the timeout
@@ -21,13 +22,14 @@
 //
 // A value that is out of range is rejected as soon as it can no longer be
 // valid (so 1 7 for the channel is refused at the 7), or at ENTER if it is
-// too small. After a rejection, an accepted value or a read back, the mode
-// is ready for the next setting.
+// too small. After a rejection the mode stays on, with the typed digits
+// cleared, ready for the value to be typed again. A chord for a setting
+// that doesn't exist is rejected and doesn't start the mode.
 //
 // Settings:
 //   1   MIDI channel, 1..16 (as numbered on the device)
 //
-// KeyPressed() and Tick() return a TAction telling the caller what
+// Begin(), KeyPressed() and Tick() return a TAction telling the caller what
 // happened, so it can apply the change and give feedback.
 //
 #ifndef _settingsmode_h
@@ -47,7 +49,7 @@ public:
 			ActSet,		// set Setting to Value (already range-checked)
 			ActRejected,	// bad setting number or value
 			ActReadBack,	// show the current value of Setting
-			ActExit		// the mode has ended
+			ActExit		// the mode has ended without doing anything
 		};
 
 		TType Type;
@@ -63,7 +65,7 @@ public:
 
 	CSettingsMode(unsigned nTimeoutMs = DefaultTimeoutMs)
 	:	m_nTimeoutMs(nTimeoutMs),
-		m_State(StateOff),
+		m_bActive(false),
 		m_nLastKeyMs(0),
 		m_nSetting(0),
 		m_nValue(0),
@@ -71,54 +73,32 @@ public:
 	{
 	}
 
-	// Switches the mode on. nNowMs is any free-running millisecond count
-	// (wraparound is fine).
-	void Enter(unsigned nNowMs)
+	// Starts the mode for a setting, in response to the * + digit chord.
+	// nNowMs is any free-running millisecond count (wraparound is fine).
+	// If there is no such setting, this is rejected and the mode is not
+	// started (and if it was on, it is left as it was).
+	TAction Begin(int nSetting, unsigned nNowMs)
 	{
-		m_State = StateChoose;
+		int nMin, nMax;
+		if (!Range(nSetting, &nMin, &nMax))
+			return Action(TAction::ActRejected, nSetting, 0);
+
+		m_bActive = true;
 		m_nLastKeyMs = nNowMs;
-		ResetEntry();
+		m_nSetting = nSetting;
+		ClearDigits();
+		return None();
 	}
 
-	bool Active(void) const		{ return m_State != StateOff; }
-
-	// True once a setting has been chosen and its value is awaited
-	bool ValueEntry(void) const	{ return m_State == StateValue; }
+	bool Active(void) const		{ return m_bActive; }
 
 	TAction KeyPressed(unsigned nKey, unsigned nNowMs)
 	{
-		if (!Active())
+		if (!m_bActive)
 			return None();
 
 		m_nLastKeyMs = nNowMs;
 
-		if (nKey == KEYPAD_STAR)
-			return Exit();
-
-		if (m_State == StateChoose)
-		{
-			if (isNumeric(nKey))
-			{
-				int nSetting = keyVal(nKey);
-
-				int nMin, nMax;
-				if (!Range(nSetting, &nMin, &nMax))
-					return Action(TAction::ActRejected, nSetting, 0);
-
-				m_nSetting = nSetting;
-				m_nValue = 0;
-				m_nDigits = 0;
-				m_State = StateValue;
-				return None();
-			}
-
-			if (nKey == KEYPAD_BS)
-				return Exit();
-
-			return None();
-		}
-
-		// Waiting for the value
 		if (isNumeric(nKey))
 		{
 			int nMin, nMax;
@@ -131,10 +111,9 @@ public:
 			// means too big for good.
 			if (m_nDigits > MaxDigits || m_nValue > nMax)
 			{
-				int nSetting = m_nSetting;
 				int nValue = m_nValue;
-				BackToChoose();
-				return Action(TAction::ActRejected, nSetting, nValue);
+				ClearDigits();
+				return Action(TAction::ActRejected, m_nSetting, nValue);
 			}
 
 			return None();
@@ -145,23 +124,29 @@ public:
 			int nSetting = m_nSetting;
 			int nValue = m_nValue;
 			unsigned nDigits = m_nDigits;
-			BackToChoose();
 
 			if (nDigits == 0)
+			{
+				Finish();
 				return Action(TAction::ActReadBack, nSetting, 0);
+			}
 
 			int nMin, nMax;
 			Range(nSetting, &nMin, &nMax);
 			if (nValue < nMin || nValue > nMax)
+			{
+				ClearDigits();
 				return Action(TAction::ActRejected, nSetting, nValue);
+			}
 
+			Finish();
 			return Action(TAction::ActSet, nSetting, nValue);
 		}
 
 		if (nKey == KEYPAD_BS)
 		{
-			BackToChoose();
-			return None();
+			Finish();
+			return Action(TAction::ActExit, 0, 0);
 		}
 
 		return None();
@@ -170,9 +155,12 @@ public:
 	// Call regularly; ends the mode after the idle timeout.
 	TAction Tick(unsigned nNowMs)
 	{
-		if (   Active()
+		if (   m_bActive
 		    && (unsigned) (nNowMs - m_nLastKeyMs) >= m_nTimeoutMs)
-			return Exit();
+		{
+			Finish();
+			return Action(TAction::ActExit, 0, 0);
+		}
 
 		return None();
 	}
@@ -182,8 +170,6 @@ public:
 	unsigned EntryDigits(void) const { return m_nDigits; }
 
 private:
-	enum TState { StateOff, StateChoose, StateValue };
-
 	// Range of valid values of a setting; false if there is no such
 	// setting. The MIDI channel range must match CSettings.
 	static bool Range(int nSetting, int *pMin, int *pMax)
@@ -211,29 +197,22 @@ private:
 		return Action(TAction::ActNone, 0, 0);
 	}
 
-	TAction Exit(void)
+	void Finish(void)
 	{
-		m_State = StateOff;
-		ResetEntry();
-		return Action(TAction::ActExit, 0, 0);
-	}
-
-	void BackToChoose(void)
-	{
-		m_State = StateChoose;
-		ResetEntry();
-	}
-
-	void ResetEntry(void)
-	{
+		m_bActive = false;
 		m_nSetting = 0;
+		ClearDigits();
+	}
+
+	void ClearDigits(void)
+	{
 		m_nValue = 0;
 		m_nDigits = 0;
 	}
 
 private:
 	unsigned m_nTimeoutMs;
-	TState m_State;
+	bool m_bActive;
 	unsigned m_nLastKeyMs;
 	int m_nSetting;
 	int m_nValue;
