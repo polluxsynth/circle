@@ -48,11 +48,13 @@ CKernel::CKernel(void): m_Settings(m_Options),
 			m_pMIDI(0),
 			m_Logger(m_Options.GetLogLevel(), &m_Timer),
 			m_Reboot(false),
-			m_PrevKeys{0},
+			m_KeyDecoder(),
 			m_nLastDropped(0),
 			m_Selector(m_Settings.FirstProgramNumber,
 				   CProgramSelector::DefaultTimeoutMs,
 				   0, m_Settings.FirstBankNumber),
+			m_SettingsMode(),
+			m_Blink(),
 			m_bLEDOn(true),
 			m_LEDMode(LEDSteady),
 			m_nPatternStartMs(0)
@@ -110,6 +112,9 @@ TShutdownMode CKernel::Run(void)
 		// Commit a half-typed number once the idle timeout expires
 		DoAction(m_Selector.Tick(NowMs()));
 
+		// The settings mode times out by itself when left alone
+		DoSettingsAction(m_SettingsMode.Tick(NowMs()));
+
 		UpdateLED();
 
 		unsigned nDropped = m_KeyQueue.Dropped();
@@ -137,8 +142,7 @@ void CKernel::AttachKeyboard(void)
 
 	// Reset the report history before registering the callback, 
 	// to avoid race with the callback.
-	for (int i = 0; i < 6; i++)
-		m_PrevKeys[i] = 0;
+	m_KeyDecoder.Reset();
 
 	pKeyboard->RegisterRemovedHandler(DeviceRemovedHandler, this);
 	pKeyboard->RegisterKeyStatusHandlerRaw(KeyStatusHandlerRaw, FALSE, this);
@@ -191,40 +195,24 @@ void CKernel::DeviceRemovedHandler(CDevice *pDevice, void *pContext)
 
 	assert(pThis != 0);
 	pThis->m_pKeyboard = 0;
+
 	LOGDBG("Numpad removed");
 }
 
 // May be called in interrupt context. Only compare, enqueue and return.
+// Raw mode reports the set of keys currently held, not press events;
+// the decoder finds the new presses, and which of them were shifted by *
+// (see keyreports.h).
 void CKernel::KeyStatusHandlerRaw(unsigned char ucModifiers, const unsigned char RawKeys[6], void *pContext)
 {
 	CKernel *pThis = static_cast<CKernel *>(pContext);
 
 	assert(pThis != 0);
 
-	// Raw mode reports the set of keys currently held, not press events,
-	// so compare against the previous report to find new presses.
-
-	// Rollover/error report (usage 1): ignore it entirely and keep the
-	// previous state, so keys aren't reported as released and re-pressed.
-	for (unsigned i = 0; i < 6; i++)
-		if (RawKeys[i] == 1)
-			return;
-
-	for (unsigned i = 0; i < 6; i++)
-	{
-		unsigned char key = RawKeys[i];
-		if (key < 4) continue; // 0 = none, 2..3 = error codes
-
-		bool bNew = true;
-		for (unsigned j = 0; j < 6; j++)
-			if (pThis->m_PrevKeys[j] == key) bNew = false;
-
-		if (bNew)
-			pThis->m_KeyQueue.Push(TKeyEvent{key, ucModifiers});
-	}
-
-	for (unsigned i = 0; i < 6; i++)
-		pThis->m_PrevKeys[i] = RawKeys[i];
+	pThis->m_KeyDecoder.Process(RawKeys,
+		[pThis, ucModifiers](unsigned char ucKey, bool bShift) {
+			pThis->m_KeyQueue.Push(TKeyEvent{ucKey, ucModifiers, bShift});
+		});
 }
 
 // Main-loop context: safe to log, block briefly, send MIDI, etc.
@@ -235,6 +223,28 @@ void CKernel::HandleKey(const TKeyEvent &Event)
 
 	if (Event.ucKey == KEYPAD_TAB) {
 		m_Reboot = true;
+		return;
+	}
+
+	// In the settings mode the keys are the mode's, not the selector's.
+	// (Holding * on while typing the value is fine: the shift flag is
+	// only looked at below, when the mode is off.)
+	if (m_SettingsMode.Active()) {
+		m_Blink.Clear();	// any key cuts short a sequence still playing
+		DoSettingsAction(m_SettingsMode.KeyPressed(Event.ucKey, NowMs()));
+		return;
+	}
+
+	// * and a digit together: settings mode, for the setting with that
+	// number. A number that is no setting is rejected (and the mode is
+	// not started).
+	if (Event.bShift && isNumeric(Event.ucKey)) {
+		int nSetting = keyVal(Event.ucKey);
+		CSettingsMode::TAction Action = m_SettingsMode.Begin(nSetting, NowMs());
+		if (Action.Type == CSettingsMode::TAction::ActNone)
+			LOGNOTE("Settings mode on, setting %d", nSetting);
+		m_Blink.Clear();
+		DoSettingsAction(Action);
 		return;
 	}
 
@@ -335,7 +345,9 @@ void CKernel::UpdateLED(void)
 	// Waiting for the user to finish something (digits of a number, or
 	// the digit after /) takes precedence over the bank lock pattern.
 	TLEDMode Mode = LEDSteady;
-	if (m_Selector.EntryDigits() > 0 || m_Selector.BankSelectPending())
+	if (   m_SettingsMode.Active()
+	    || m_Selector.EntryDigits() > 0
+	    || m_Selector.BankSelectPending())
 		Mode = LEDEntry;
 	else if (m_Selector.BankLock())
 		Mode = LEDBankLock;
@@ -352,21 +364,72 @@ void CKernel::UpdateLED(void)
 	unsigned nPhaseMs = nNowMs - m_nPatternStartMs;
 
 	bool bOn = true;
-	switch (Mode) {
-	case LEDEntry:
-		bOn = nPhaseMs % EntryBlinkPeriodMs >= EntryBlinkPeriodMs / 2;
-		break;
+	if (m_Blink.Active(nNowMs)) {
+		// An acknowledgement is playing: it takes the
+		// LED over from the mode pattern until it is done.
+		bOn = m_Blink.IsOn(nNowMs);
+	} else {
+		switch (Mode) {
+		case LEDEntry:
+			bOn = nPhaseMs % EntryBlinkPeriodMs >= EntryBlinkPeriodMs / 2;
+			break;
 
-	case LEDBankLock:
-		bOn = nPhaseMs % BankLockPeriodMs >= BankLockOffMs;
-		break;
+		case LEDBankLock:
+			bOn = nPhaseMs % BankLockPeriodMs >= BankLockOffMs;
+			break;
 
-	default:
-		break;
+		default:
+			break;
+		}
 	}
 
 	if (bOn != m_bLEDOn) {
 		pKeyboard->SetLEDs(bOn ? LED_NUM_LOCK : 0);
 		m_bLEDOn = bOn;
+	}
+}
+
+// Carries out what the settings mode decided, and gives the feedback
+// (there is no display; the NumLock LED is all there is).
+void CKernel::DoSettingsAction(const CSettingsMode::TAction &Action)
+{
+	switch (Action.Type) {
+	case CSettingsMode::TAction::ActSet:
+		if (ApplySetting(Action.Setting, Action.Value))
+			m_Blink.BuildAccepted();
+		else
+			m_Blink.BuildRejected();
+		m_Blink.Start(NowMs());
+		break;
+
+	case CSettingsMode::TAction::ActRejected:
+		LOGNOTE("Settings: rejected");
+		m_Blink.BuildRejected();
+		m_Blink.Start(NowMs());
+		break;
+
+	case CSettingsMode::TAction::ActExit:
+		LOGNOTE("Settings mode off");
+		m_Blink.Clear();
+		break;
+
+	default:
+		break;
+	}
+}
+
+// Changes a setting while running; false if there is no such setting or
+// the value is not valid for it.
+bool CKernel::ApplySetting(int nSetting, int nValue)
+{
+	switch (nSetting) {
+	case CSettingsMode::SettingMidiChannel:
+		if (!m_Settings.SetMidiChannel(nValue))
+			return false;
+		LOGNOTE("MIDI channel is now %u", m_Settings.MidiChannelNumber());
+		return true;
+
+	default:
+		return false;
 	}
 }

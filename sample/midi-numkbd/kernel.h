@@ -37,13 +37,17 @@
 
 #include "spscqueue.h"
 #include "progselect.h"
+#include "keyreports.h"
 #include "settings.h"
+#include "settingsmode.h"
+#include "blinkseq.h"
 
 // A key press, queued from the USB interrupt path for the main loop
 struct TKeyEvent
 {
 	unsigned char ucKey;		// raw USB HID usage code
 	unsigned char ucModifiers;	// modifier bits at the time of the press
+	bool bShift;			// * was already held down when the key went down
 };
 
 enum TShutdownMode
@@ -79,9 +83,10 @@ private:
 
 	bool m_Reboot; // Set (from the main loop only) to make Run() exit
 
-	// Previous raw report, used to detect new presses. Touched only by
-	// the USB callback (IRQ context) once the handler is registered.
-	unsigned char m_PrevKeys[6];
+	// Turns raw reports into key presses (and handles the * shift key).
+	// Touched only by the USB callback (IRQ context) once the handler
+	// is registered.
+	CKeyReportDecoder m_KeyDecoder;
 	// Fake a 'this' pointer for static callbacks, in the case they don't
 	// have a context pointer where 'this' can be passed.
 	// We can probably remove this eventually.
@@ -95,12 +100,22 @@ private:
 	// Only used from the main loop.
 	CProgramSelector m_Selector;
 
+	// Settings mode: entered by pressing a digit while * is held down
+	// (see settingsmode.h). Main loop only.
+	CSettingsMode m_SettingsMode;
+
+	// One-shot LED sequence (acknowledgement), shown in
+	// place of the mode pattern while it plays.
+	CBlinkSequence m_Blink;
+
 	// NumLock LED feedback, main loop only. The pattern shows the mode:
 	//   steady on        normal
 	//   4 Hz blink       a number is being typed, or a bank select (/)
-	//                    is waiting for its digit
+	//                    is waiting for its digit, or a setting value is
+	//                    being typed in the settings mode
 	//   mostly on, with  bank lock is active
 	//   a brief blip off
+	// On top of those, a one-shot sequence (m_Blink) can play: see blinkseq.h.
 	enum TLEDMode { LEDSteady, LEDEntry, LEDBankLock };
 	bool m_bLEDOn;			// state we last sent to the keyboard
 	TLEDMode m_LEDMode;		// pattern currently shown
@@ -115,6 +130,8 @@ private:
 	void SendBankSelect(unsigned nBank);
 	unsigned NowMs(void);
 	void UpdateLED(void);
+	void DoSettingsAction(const CSettingsMode::TAction &Action);
+	bool ApplySetting(int nSetting, int nValue);
 
 	// USB callbacks. Static because Circle takes plain function pointers.
 	// KeyStatusHandlerRaw may run in interrupt context: keep it short,
