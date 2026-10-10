@@ -1,3 +1,39 @@
-README
+USB (numeric) keypad to (USB) MIDI program and bank change translator.
 
-The Act LED flashes 10 times and on the 3.5mm headphone jack 10 "clicks" are generated at the same time. Then the system reboots.
+Converts entries done on the keypad to MIDI program change.
+
+- Enter program change number and press enter to send to
+  connected MIDI device.
+  - The number is sent directly as soon as it is complete, which
+    make the Enter redundant in some cases (but pressing it
+    when its not needed doesn't have any ill effects).
+  - Automatically sends after 1.5s after entering digits even if
+    Enter is not pressed.
+  - Backspace clears the entry.
+- Toggling NumLock holds the tens and hundreds, making 0..9
+  directly change the units value (without pressing Enter).
+  - E.g. if the current program change is 56, pressing Numlock causes
+    the 5 to be held and programs 50..59 can be accessed directly
+    using a single key press.
+- / is a bank prefix, press / and a bank number to send
+  a MIDI bank change (default CC 32) (no Enter needed).
+- MIDI channel can be set by holding * and pressing 1,
+  then release and follow by the channel number (1..16) and Enter.
+  - This is not saved across reboots.
+- Force reboot by holding * and pressing 0, release, followed
+  by Del.
+- By default the first program number is 0 and the first bank
+  is 0, but this can be changed in cmdline.txt by setting
+  program_base and bank_base to 1, respectively.
+  - This changes the user view, so that if program_base
+    is set to 1, then entering program change 1 will send 0 on
+    MIDI. Conversely, if program_base is 0, then program change
+    1 will send 1 on MIDI (and entering 0 will send 0).
+    - This means that when the base is set to 1, entering 0 as
+      program change value is not valid and will result in
+      nothing being sent.
+- The default MIDI channel is 1, but it can be changed runtime
+  using the setting above, or permanently by editing
+  cmdline.txt, and setting the midi_channel property.
+- The default MIDI bank change CC is 32, but it can be changed
+  in cmdline.txt, by setting the bank_cc property.
