@@ -18,8 +18,12 @@
 //
 // A setting that is absent gets its default. One that is present but not a
 // plain decimal number in range is also replaced by its default. Report()
-// logs each setting with its value and which of the three cases applied
-// (the logger isn't up yet when the settings are read).
+// logs each setting with its value and which of the cases applied (the
+// logger isn't up yet when the settings are read).
+//
+// Settings that can be changed while running (only the MIDI channel so far)
+// are also kept in the SD card's stored settings (settingsstore.h). A stored
+// value overrides cmdline.txt: see ApplyStored().
 //
 #ifndef _settings_h
 #define _settings_h
@@ -47,7 +51,8 @@ public:
 	unsigned MidiChannel;		// 0..15 (0 is "channel 1")
 
 	explicit CSettings(const CKernelOptions &Options)
-	:	m_nInfo(0)
+	:	m_nInfo(0),
+		m_nChannelInfo(MaxInfo)
 	{
 		FirstProgramNumber = (int) Get(Options, "program_base", 0, 1,
 					       DefaultProgramBase);
@@ -55,6 +60,7 @@ public:
 					    DefaultBankBase);
 		BankSelectCC = (u8) Get(Options, "bank_cc", 0, 127,
 					DefaultBankCC);
+		m_nChannelInfo = m_nInfo;	// where Get() is about to note it
 		MidiChannel = Get(Options, "midi_channel", MinMidiChannel,
 				  MaxMidiChannel, DefaultMidiChannel) - 1;
 	}
@@ -73,6 +79,21 @@ public:
 			return false;
 
 		MidiChannel = nChannel - 1;
+		return true;
+	}
+
+	// Takes the MIDI channel (1..16) from the stored settings, replacing
+	// the cmdline.txt/default value, and notes that for Report(). False,
+	// changing nothing, if it is out of range.
+	bool ApplyStored(unsigned nChannel)
+	{
+		if (!SetMidiChannel(nChannel))
+			return false;
+
+		if (m_nChannelInfo < m_nInfo) {
+			m_Info[m_nChannelInfo].nValue = (int) nChannel;
+			m_Info[m_nChannelInfo].Source = FromStored;
+		}
 		return true;
 	}
 
@@ -96,6 +117,11 @@ public:
 					Info.pName, Info.nValue);
 				break;
 
+			case FromStored:
+				LOGNOTE("%s = %d (stored on the SD card)",
+					Info.pName, Info.nValue);
+				break;
+
 			case Rejected:
 				LOGWARN("%s = %d (default; \"%s\" in the command line is not valid)",
 					Info.pName, Info.nValue, Info.pRaw);
@@ -106,7 +132,7 @@ public:
 
 private:
 	enum { MaxInfo = 4 };		// one per setting
-	enum TSource { FromDefault, FromCmdline, Rejected };
+	enum TSource { FromDefault, FromCmdline, Rejected, FromStored };
 
 	struct TInfo
 	{
@@ -152,6 +178,7 @@ private:
 private:
 	TInfo m_Info[MaxInfo];
 	unsigned m_nInfo;
+	unsigned m_nChannelInfo;	// index in m_Info of the MIDI channel
 };
 
 #endif

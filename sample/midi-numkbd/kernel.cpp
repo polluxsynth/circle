@@ -25,7 +25,9 @@ static const char From[] = "kernel";
 
 CKernel *CKernel::s_pThis = 0;
 // The user-configurable settings (program/bank numbering, bank select CC,
-// MIDI channel) are read from cmdline.txt: see settings.h.
+// MIDI channel) are read from cmdline.txt: see settings.h. The ones that can
+// be changed from the numpad are also stored in a raw SD card sector, which
+// overrides cmdline.txt: see settingsstore.h.
 
 // How many "umidiN" device names to try when looking for a MIDI device
 static const unsigned MaxMIDIDevices = 4;
@@ -42,6 +44,8 @@ static const unsigned BankLockOffMs = 150;
 
 CKernel::CKernel(void): m_Settings(m_Options),
 			m_Timer(&m_Interrupt),
+			m_EMMC(&m_Interrupt, &m_Timer),
+			m_Storage(&m_EMMC),
 			//m_Serial(&m_Interrupt),
 			m_USBHCI(&m_Interrupt, &m_Timer, TRUE),
 			m_pKeyboard(0),
@@ -75,13 +79,15 @@ boolean CKernel::Initialize(void)
 	if (bOK)
 		bOK = m_Logger.Initialize(&m_Serial);
 	if (bOK)
-		m_Settings.Report();
-	if (bOK)
 		bOK = m_Interrupt.Initialize();
 	if (bOK)
 		bOK = m_Timer.Initialize();
 	if (bOK)
 		bOK = m_USBHCI.Initialize();
+	if (bOK)
+		LoadStoredSettings();	// not fatal if the SD card is no good
+	if (bOK)
+		m_Settings.Report();	// after the stored settings have been applied
 
 	m_ActLED.Blink(2);
 
@@ -427,9 +433,62 @@ bool CKernel::ApplySetting(int nSetting, int nValue)
 		if (!m_Settings.SetMidiChannel(nValue))
 			return false;
 		LOGNOTE("MIDI channel is now %u", m_Settings.MidiChannelNumber());
-		return true;
+
+		// The new channel is in force for this session either way. If it
+		// can't be stored, say so with the "rejected" blink: it will not
+		// survive a restart.
+		return SaveSettings();
 
 	default:
 		return false;
 	}
+}
+
+// Reads the stored settings from the SD card and applies them over what came
+// from cmdline.txt. Anything wrong with the card or the stored data is
+// logged and otherwise ignored: the device then runs on cmdline.txt and
+// the defaults, which is what it did before settings were stored at all.
+void CKernel::LoadStoredSettings(void)
+{
+	if (!m_EMMC.Initialize()) {
+		LOGWARN("SD card not available: settings will not be stored");
+		return;
+	}
+
+	if (!m_Storage.Initialize())
+		return;		// has said why
+
+	CSettingsStore::TSettings Stored;
+	CSettingsStore::TResult Result = m_Storage.Load(Stored);
+	if (Result == CSettingsStore::ResultBlank) {
+		LOGNOTE("No stored settings");
+		return;
+	}
+	if (Result != CSettingsStore::ResultOk) {
+		LOGWARN("Stored settings ignored: %s", CSettingsStore::ResultName(Result));
+		return;
+	}
+
+	if (Stored.MidiChannel != CSettingsStore::NotStored)
+		m_Settings.ApplyStored(Stored.MidiChannel);
+}
+
+// Writes the settings that can be changed at run time to the SD card. Blocks
+// for a few milliseconds; main loop only.
+bool CKernel::SaveSettings(void)
+{
+	if (!m_Storage.Usable()) {
+		LOGWARN("Settings not saved: no usable storage");
+		return false;
+	}
+
+	CSettingsStore::TSettings Stored;
+	Stored.MidiChannel = m_Settings.MidiChannelNumber();
+	if (!m_Storage.Save(Stored)) {
+		LOGWARN("Saving the settings failed");
+		return false;
+	}
+
+	LOGNOTE("Settings saved");
+	return true;
 }

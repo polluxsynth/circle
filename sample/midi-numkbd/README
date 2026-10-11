@@ -22,7 +22,7 @@ Converts entries done on the keypad to MIDI program change.
   a MIDI bank change (default CC 32) (no Enter needed).
 - MIDI channel can be set by holding * and pressing 1,
   then release and follow by the channel number (1..16) and Enter.
-  - This is not saved across reboots.
+  - MIDI channel is saved across reboots by writing to the SD card.
 - Force reboot by holding * and pressing 0, release, followed
   by Del.
 - By default the first program number is 0 and the first bank

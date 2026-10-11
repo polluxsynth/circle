@@ -33,12 +33,14 @@
 #include <circle/usb/usbhcidevice.h>
 #include <circle/usb/usbkeyboard.h>
 #include <circle/usb/usbmidi.h>
+#include <SDCard/emmc.h>      // CEMMCDevice (the stored settings are in a raw SD sector)
 #include <assert.h>
 
 #include "spscqueue.h"
 #include "progselect.h"
 #include "keyreports.h"
 #include "settings.h"
+#include "settingsstorage.h"
 #include "settingsmode.h"
 #include "blinkseq.h"
 
@@ -75,6 +77,10 @@ private:
 	CExceptionHandler m_Exception;
 	CInterruptSystem m_Interrupt;
 	CTimer m_Timer;
+	// SD card, for the stored settings only (no ACT LED: Run() owns it).
+	// Declare after m_Timer and m_Interrupt.
+	CEMMCDevice m_EMMC;
+	CSettingsStorage m_Storage;           // uses m_EMMC
 	CUSBHCIDevice m_USBHCI;               // declare after m_Timer
 	CUSBKeyboardDevice *m_pKeyboard;
 	CUSBMIDIDevice *m_pMIDI;     // first USB MIDI device found, or 0
@@ -132,6 +138,8 @@ private:
 	void UpdateLED(void);
 	void DoSettingsAction(const CSettingsMode::TAction &Action);
 	bool ApplySetting(int nSetting, int nValue);
+	void LoadStoredSettings(void);
+	bool SaveSettings(void);
 
 	// USB callbacks. Static because Circle takes plain function pointers.
 	// KeyStatusHandlerRaw may run in interrupt context: keep it short,

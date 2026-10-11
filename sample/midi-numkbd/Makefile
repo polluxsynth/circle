@@ -6,7 +6,8 @@ CIRCLEHOME = ../..
 
 OBJS	= main.o kernel.o
 
-LIBS	= $(CIRCLEHOME)/lib/usb/libusb.a \
+LIBS	= $(CIRCLEHOME)/addon/SDCard/libsdcard.a \
+	  $(CIRCLEHOME)/lib/usb/libusb.a \
 	  $(CIRCLEHOME)/lib/input/libinput.a \
 	  $(CIRCLEHOME)/lib/fs/libfs.a \
 	  $(CIRCLEHOME)/lib/libcircle.a
@@ -29,9 +30,18 @@ HOSTCXXFLAGS ?= -std=c++17 -Wall -fsanitize=address,undefined
 settingsmode_test: settingsmode_test.cpp settingsmode.h blinkseq.h rawkeys.h
 	$(HOSTCXX) $(HOSTCXXFLAGS) $< -o $@
 
+settingsstore_test: settingsstore_test.cpp settingsstore.h
+	$(HOSTCXX) $(HOSTCXXFLAGS) $< -o $@
+
+# Host tool to show/set/erase the stored settings on an SD card or image;
+# shares settingsstore.h with the firmware.
+nkstore: nkstore.cpp settingsstore.h
+	$(HOSTCXX) -std=c++17 -Wall -O2 $< -o $@
+
 .PHONY: test testclean
-test: settingsmode_test
+test: settingsmode_test settingsstore_test
 	./settingsmode_test
+	./settingsstore_test
 
 testclean:
-	rm -f settingsmode_test
+	rm -f settingsmode_test settingsstore_test nkstore
