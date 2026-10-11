@@ -142,6 +142,16 @@ public:
 		return None();
 	}
 
+	// Discards a half-typed number and a pending bank select without
+	// sending anything. For when another mode takes over the keys (the
+	// settings mode), so that nothing typed before it is sent later, e.g.
+	// on a channel changed in the meantime. The last program and the bank
+	// lock are left alone.
+	void Abort(void)
+	{
+		Cancel();
+	}
+
 	// For display/logging
 	int LastProgram(void) const	{ return m_nLastProgram; }
 	bool BankLock(void) const	{ return m_bBankLock; }

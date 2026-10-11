@@ -115,8 +115,10 @@ TShutdownMode CKernel::Run(void)
 		while (m_KeyQueue.Pop(Event))
 			HandleKey(Event);
 
-		// Commit a half-typed number once the idle timeout expires
-		DoAction(m_Selector.Tick(NowMs()));
+		// Commit a half-typed number once the idle timeout expires, unless
+		// in settings mode (then nothing is sent).
+		if (!m_SettingsMode.Active())
+			DoAction(m_Selector.Tick(NowMs()));
 
 		// The settings mode times out by itself when left alone
 		DoSettingsAction(m_SettingsMode.Tick(NowMs()));
@@ -241,6 +243,10 @@ void CKernel::HandleKey(const TKeyEvent &Event)
 	// not started).
 	if (Event.bShift && isNumeric(Event.ucKey)) {
 		int nSetting = keyVal(Event.ucKey);
+
+		// Whatever was half-typed is dropped, not sent later (see Run()).
+		m_Selector.Abort();
+
 		CSettingsMode::TAction Action = m_SettingsMode.Begin(nSetting, NowMs());
 		if (Action.Type == CSettingsMode::TAction::ActNone)
 			LOGNOTE("Settings mode on, setting %d", nSetting);
