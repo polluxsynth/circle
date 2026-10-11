@@ -188,6 +188,8 @@ void CKernel::AttachMIDI(void)
 // i.e. from within UpdatePlugAndPlay() in Run(). That is the same context
 // that sends MIDI, so SendProgramChange() cannot be using the pointer
 // while it is cleared.
+// (Verified in Circle 51.1.1 that the removal code isn't called
+// from interupt context).
 void CKernel::MIDIRemovedHandler(CDevice *pDevice, void *pContext)
 {
 	CKernel *pThis = static_cast<CKernel *>(pContext);
