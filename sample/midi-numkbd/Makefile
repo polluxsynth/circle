@@ -33,15 +33,27 @@ settingsmode_test: settingsmode_test.cpp settingsmode.h blinkseq.h rawkeys.h
 settingsstore_test: settingsstore_test.cpp settingsstore.h
 	$(HOSTCXX) $(HOSTCXXFLAGS) $< -o $@
 
+progselect_test: progselect_test.cpp progselect.h rawkeys.h
+	$(HOSTCXX) $(HOSTCXXFLAGS) $< -o $@
+
+keyreports_test: keyreports_test.cpp keyreports.h rawkeys.h
+	$(HOSTCXX) $(HOSTCXXFLAGS) $< -o $@
+
+blinkseq_test: blinkseq_test.cpp blinkseq.h
+	$(HOSTCXX) $(HOSTCXXFLAGS) $< -o $@
+
 # Host tool to show/set/erase the stored settings on an SD card or image;
 # shares settingsstore.h with the firmware.
 nkstore: nkstore.cpp settingsstore.h
 	$(HOSTCXX) -std=c++17 -Wall -O2 $< -o $@
 
 .PHONY: test testclean
-test: settingsmode_test settingsstore_test
+test: settingsmode_test settingsstore_test progselect_test keyreports_test blinkseq_test
 	./settingsmode_test
 	./settingsstore_test
+	./progselect_test
+	./keyreports_test
+	./blinkseq_test
 
 testclean:
-	rm -f settingsmode_test settingsstore_test nkstore
+	rm -f settingsmode_test settingsstore_test progselect_test keyreports_test blinkseq_test nkstore
